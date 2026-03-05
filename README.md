@@ -2,6 +2,45 @@
 
 A complete ML pipeline to classify **MCP (Model Context Protocol) vs non-MCP network traffic** using only network-level metadata features (no payload inspection).
 
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Step-by-Step Tutorial](#step-by-step-tutorial)
+- [Running Components Individually](#running-components-individually)
+- [Customizing the Project](#customizing-the-project)
+- [Data Directory Layout](#data-directory-layout)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+
+---
+
+## Overview
+
+This project builds a machine-learning classifier that distinguishes MCP
+(Model Context Protocol) traffic from regular HTTP, WebSocket, and TCP traffic
+**using only network-level metadata** — packet sizes, inter-arrival times,
+TCP flags, and similar features. No payload inspection (deep packet inspection)
+is performed, making the approach practical for real-world deployments.
+
+The pipeline has four stages:
+
+1. **Traffic Generation** — start MCP and non-MCP servers, then drive traffic
+   through them.
+2. **Packet Capture** — sniff packets on the loopback interface with
+   [Scapy](https://scapy.net/) and save labelled pcap files.
+3. **Feature Extraction** — read pcap files, group packets into flows, and
+   compute 30+ statistical features per flow.
+4. **Model Training & Evaluation** — train Random Forest, XGBoost, and
+   Logistic Regression classifiers, pick the best by F1-score, and evaluate
+   on held-out data.
+
+---
+
 ## Architecture
 
 ```
@@ -28,21 +67,76 @@ MCP_Project/
 
 ---
 
-## Quick Start
+## Prerequisites
 
-### 1. Install dependencies
+| Requirement | Why |
+|---|---|
+| **Python 3.11+** | Required by the `mcp` SDK and type-hint syntax used throughout the project |
+| **pip** | To install Python dependencies from `requirements.txt` |
+| **Root / Administrator privileges** | Scapy needs raw-socket access for packet capture (`sudo` on Linux/macOS) |
+| **Loopback interface** (`lo` on Linux, `lo0` on macOS) | Default capture interface; all servers bind to `localhost` |
+| **Git** | To clone this repository |
+
+### Platform notes
+
+| Platform | Notes |
+|---|---|
+| **Linux** | Works out of the box. Use `lo` as the capture interface. |
+| **macOS** | Use `lo0` instead of `lo` (e.g. `--interface lo0`). You may need to install Xcode command-line tools (`xcode-select --install`). |
+| **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. Run commands in an Administrator terminal. Use `\\Device\\NPF_Loopback` or the name reported by `scapy.all.get_if_list()` as the interface. |
+
+---
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/AryanUrs/MCP_Project.git
+cd MCP_Project
+```
+
+### 2. Create a virtual environment (recommended)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Linux / macOS
+# .venv\Scripts\activate         # Windows
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> **Note:** Packet capture requires `scapy` and **root / Administrator privileges** on most operating systems.
+### 4. Verify the installation
+
+```bash
+python -c "import mcp, scapy, sklearn, pandas; print('All dependencies OK')"
+```
+
+You should see:
+
+```
+All dependencies OK
+```
+
+> **Tip:** If `xgboost` fails to install on your platform, the training module
+> will automatically fall back to scikit-learn's `GradientBoostingClassifier`.
 
 ---
 
-### 2. Run the full pipeline (automated)
+## Step-by-Step Tutorial
 
-The orchestrator starts all servers, generates traffic, captures packets, and saves labelled pcap files:
+This section walks through the **entire pipeline** from traffic generation to
+model evaluation. Each step can also be run independently — see
+[Running Components Individually](#running-components-individually).
+
+### Step 1 — Generate traffic and capture packets
+
+The orchestrator starts all servers, generates traffic, captures packets, and
+saves labelled pcap files — all in one command:
 
 ```bash
 sudo python -m traffic_capture.orchestrator \
@@ -58,13 +152,29 @@ sudo python -m traffic_capture.orchestrator \
 | `--duration` | 60 | Traffic generation duration in seconds |
 | `--requests` | 50 | Requests per generator |
 | `--mcp-sessions` | 3 | Concurrent MCP client sessions |
-| `--interface` | `lo` | Network interface to capture on |
+| `--interface` | `lo` | Network interface to capture on (`lo0` on macOS) |
 | `--output-dir` | `data/pcap` | Where pcap files are saved |
 | `--no-capture` | — | Skip packet capture, only generate traffic |
 
----
+**Expected output:**
 
-### 3. Extract features
+```
+2025-01-15 10:00:01 INFO Starting: python -m mcp_server.server --port 8000
+2025-01-15 10:00:01 INFO Starting: python -m non_mcp_traffic.server ...
+2025-01-15 10:00:02 INFO Waiting for servers to start…
+2025-01-15 10:00:04 INFO Generating traffic for 60 seconds…
+2025-01-15 10:01:04 INFO Traffic generation complete.
+2025-01-15 10:01:05 INFO Pipeline finished. pcap files are in: data/pcap
+```
+
+After this step, `data/pcap/` will contain files like:
+
+```
+data/pcap/mcp_1705312800.pcap
+data/pcap/non_mcp_1705312800.pcap
+```
+
+### Step 2 — Extract features
 
 ```bash
 python -m feature_extraction.extractor \
@@ -72,7 +182,24 @@ python -m feature_extraction.extractor \
     --output data/features.csv
 ```
 
-Produces a CSV with one row per network flow and the following feature columns:
+This reads every pcap file in `data/pcap/`, groups packets into network flows
+(by 5-tuple: src IP, dst IP, src port, dst port, protocol), and computes 30+
+features per flow.
+
+**Expected output:**
+
+```
+2025-01-15 10:02:00 INFO Reading data/pcap/mcp_1705312800.pcap (label=mcp)
+2025-01-15 10:02:00 INFO   1420 packets loaded
+2025-01-15 10:02:00 INFO   12 flows extracted
+2025-01-15 10:02:01 INFO Reading data/pcap/non_mcp_1705312800.pcap (label=non_mcp)
+2025-01-15 10:02:01 INFO   2380 packets loaded
+2025-01-15 10:02:01 INFO   35 flows extracted
+2025-01-15 10:02:01 INFO Saved 47 flows (12 MCP, 35 non-MCP) to data/features.csv
+```
+
+The resulting CSV (`data/features.csv`) has one row per flow with these
+columns:
 
 | Category | Features |
 |---|---|
@@ -86,9 +213,7 @@ Produces a CSV with one row per network flow and the following feature columns:
 | Idle time | `idle_time_{mean,std,max}` |
 | Ports | `src_port`, `dst_port`, `protocol` |
 
----
-
-### 4. Train models
+### Step 3 — Train models
 
 ```bash
 python -m model.train \
@@ -108,21 +233,78 @@ Three classifiers are compared:
 
 The best model by weighted F1-score is saved to `models/best_model.pkl`.
 
----
+**Expected output (abbreviated):**
 
-### 5. Evaluate a saved model
+```
+======================================================================
+TRAINING AND EVALUATION
+======================================================================
+
+--- Random Forest ---
+  CV F1 (mean ± std): 0.9812 ± 0.0134
+  Test F1 (weighted): 0.9850
+              precision    recall  f1-score   support
+         mcp       0.98      0.99      0.98        12
+     non_mcp       0.99      0.98      0.99        35
+  ...
+
+--- XGBoost ---
+  ...
+
+--- Logistic Regression ---
+  ...
+
+======================================================================
+BEST MODEL: Random Forest  (test F1 = 0.9850)
+======================================================================
+
+Top-10 feature importances:
+pkt_size_mean      0.1842
+iat_mean           0.1234
+...
+```
+
+### Step 4 — Evaluate on new data
 
 ```bash
 python -m model.evaluate \
     --model models/best_model.pkl \
-    --features data/new_features.csv
+    --features data/features.csv
 ```
 
-Prints a classification report and confusion matrix. If the model supports `predict_proba`, per-flow prediction probabilities are written to `<features>_predictions.csv`.
+Prints a classification report and confusion matrix. If the model supports
+`predict_proba`, per-flow prediction probabilities are written to
+`data/features_predictions.csv`.
+
+**Expected output:**
+
+```
+============================================================
+Evaluation on: data/features.csv
+Model:         models/best_model.pkl
+============================================================
+
+Weighted F1-score: 0.9850
+
+Classification Report:
+              precision    recall  f1-score   support
+         mcp       0.98      0.99      0.98        12
+     non_mcp       0.99      0.98      0.99        35
+    accuracy                           0.98        47
+   macro avg       0.98      0.98      0.98        47
+weighted avg       0.99      0.98      0.99        47
+
+Confusion Matrix:
+[[12  0]
+ [ 1 34]]
+```
 
 ---
 
-## Running components individually
+## Running Components Individually
+
+Each module can be run as a standalone command. This is useful for debugging,
+developing new features, or generating traffic without the full orchestrator.
 
 ### MCP Server
 
@@ -130,7 +312,10 @@ Prints a classification report and confusion matrix. If the model supports `pred
 python -m mcp_server.server --port 8000
 ```
 
-Tools exposed: `add`, `subtract`, `multiply`, `divide`, `power`, `sqrt`, `echo`, `echo_upper`, `echo_reversed`, `get_weather`, `get_forecast`, `count_words`, `count_characters`, `to_title_case`, `replace_substring`, `split_text`.
+Tools exposed: `add`, `subtract`, `multiply`, `divide`, `power`, `sqrt`,
+`echo`, `echo_upper`, `echo_reversed`, `get_weather`, `get_forecast`,
+`count_words`, `count_characters`, `to_title_case`, `replace_substring`,
+`split_text`.
 
 ### MCP Client
 
@@ -164,7 +349,71 @@ python -m non_mcp_traffic.tcp_traffic --host localhost --port 5002 --connections
 
 ---
 
-## Data directory layout
+## Customizing the Project
+
+### Increase the dataset size
+
+Generate more traffic by raising `--duration` and `--requests`:
+
+```bash
+sudo python -m traffic_capture.orchestrator \
+    --duration 300 \
+    --requests 500 \
+    --mcp-sessions 10 \
+    --interface lo \
+    --output-dir data/pcap
+```
+
+You can run the orchestrator multiple times — pcap filenames include
+timestamps, so new files are added alongside existing ones. The feature
+extractor will process all pcap files in the directory.
+
+### Add new MCP tools
+
+Edit `mcp_server/server.py` and register a new tool with the `@mcp.tool()`
+decorator:
+
+```python
+@mcp.tool()
+def my_new_tool(param: str) -> str:
+    """Description of your new tool."""
+    return f"Result: {param}"
+```
+
+The MCP client (`mcp_client/client.py`) discovers tools dynamically via
+`session.list_tools()`, but you may also want to add a helper function
+(similar to `_random_calculator_call`) to generate targeted traffic for
+your new tool.
+
+### Add new non-MCP traffic types
+
+1. Create a new generator file in `non_mcp_traffic/` (follow the pattern in
+   `http_traffic.py`).
+2. Start the corresponding server (or reuse the existing one).
+3. Register the port in `traffic_capture/orchestrator.py` so the packet
+   capture module labels the traffic correctly.
+
+### Tune the ML models
+
+Edit `model/train.py` → `_build_classifiers()` to change hyper-parameters or
+add new classifiers. Any scikit-learn-compatible estimator works — just add it
+to the `classifiers` dictionary.
+
+### Use your own pcap files
+
+If you already have labelled pcap files, place them in a directory following
+the naming convention `mcp_*.pcap` and `non_mcp_*.pcap`, then run the feature
+extractor directly:
+
+```bash
+python -m feature_extraction.extractor \
+    --pcap-dir /path/to/your/pcaps \
+    --output data/features.csv
+```
+
+---
+
+## Data Directory Layout
 
 ```
 data/
@@ -175,6 +424,73 @@ data/
 models/
 └── best_model.pkl                 # saved best classifier
 ```
+
+> Both `data/` and `models/` are in `.gitignore` because they are generated at
+> runtime.
+
+---
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'mcp'`
+
+Make sure you installed all dependencies inside an active virtual environment:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### `PermissionError` or `Operation not permitted` during packet capture
+
+Scapy needs raw-socket access. Run the orchestrator (or `capture.py`) with
+`sudo`:
+
+```bash
+sudo python -m traffic_capture.orchestrator ...
+```
+
+On macOS with a virtual environment, pass the full path to the venv Python:
+
+```bash
+sudo .venv/bin/python -m traffic_capture.orchestrator --interface lo0 ...
+```
+
+### `OSError: No such device` (wrong network interface)
+
+Use `lo` on Linux or `lo0` on macOS. To list available interfaces:
+
+```bash
+python -c "from scapy.all import get_if_list; print(get_if_list())"
+```
+
+### Empty pcap files / no flows extracted
+
+- Ensure the servers started successfully (check for port-conflict errors).
+- Increase `--duration` and `--requests` to generate more traffic.
+- Verify the capture interface matches where traffic flows (use `lo` /
+  `lo0` when servers bind to `localhost`).
+
+### `xgboost` installation fails
+
+The training module falls back to scikit-learn's `GradientBoostingClassifier`
+automatically. You can safely ignore the `xgboost` install error and
+proceed.
+
+### Low F1-score or poor model performance
+
+- Generate more data — the default 60-second capture may produce too few
+  flows for a robust model.
+- Try increasing `--cv-folds` for a better estimate of generalisation.
+- Inspect `data/features.csv` for class imbalance and consider adjusting
+  `--requests` or `--mcp-sessions` to balance the traffic mix.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and
+contribution workflow.
 
 ---
 
