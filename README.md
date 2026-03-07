@@ -85,7 +85,7 @@ MCP_Project/
 
 | Platform | Notes |
 |---|---|
-| **Linux** | Works out of the box. Use `lo` as the capture interface. |
+| **Linux** | Install `libpcap-dev` (`sudo apt install libpcap-dev`). On Ubuntu you may also need `build-essential` and `python3-dev` (`sudo apt install build-essential python3-dev`). Use `lo` as the capture interface. |
 | **macOS** | Use `lo0` instead of `lo` (e.g. `--interface lo0`). You may need to install Xcode command-line tools (`xcode-select --install`). |
 | **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. During installation, enable **"Support loopback traffic"** and **"WinPcap API-compatible Mode"**. Run commands in an **Administrator** PowerShell. The loopback interface is auto-detected; you can verify with `python -c "from scapy.all import get_if_list; print(get_if_list())"`. |
 
@@ -642,16 +642,24 @@ pip install -r requirements.txt
 
 Scapy needs raw-socket access.
 
-**Linux / macOS:** Run the orchestrator (or `capture.py`) with `sudo`:
+**Linux / macOS:** Run the orchestrator (or `capture.py`) with `sudo`.
+
+> **Important:** `sudo python` uses the **system** Python, not your virtual environment.
+> Always pass the full path to the venv Python so the correct packages are found:
 
 ```bash
-sudo python -m traffic_capture.orchestrator ...
+# Linux
+sudo .venv/bin/python -m traffic_capture.orchestrator ...
+
+# macOS
+sudo .venv/bin/python -m traffic_capture.orchestrator --interface lo0 ...
 ```
 
-On macOS with a virtual environment, pass the full path to the venv Python:
+Alternatively, grant raw-socket capability once and then run without `sudo`:
 
 ```bash
-sudo .venv/bin/python -m traffic_capture.orchestrator --interface lo0 ...
+sudo setcap cap_net_raw+eip $(readlink -f .venv/bin/python)
+python -m traffic_capture.orchestrator ...
 ```
 
 **Windows:** Run PowerShell as **Administrator** (right-click → *Run as administrator*) and ensure [Npcap](https://npcap.com/) is installed:

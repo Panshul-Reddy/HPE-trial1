@@ -4,9 +4,13 @@ Batch traffic generation script.
 Runs the orchestrator in a loop to accumulate pcap files, then extracts
 features into a CSV.  Stops once the target number of rows is reached.
 
-Usage (run from project root with venv activated, as Administrator):
+Usage (run from project root with venv activated, with elevated privileges):
+  Windows  (Administrator PowerShell):
     python batch_generate.py                       # default 10 000 rows
     python batch_generate.py --target-rows 5000
+  Linux / macOS  (use sudo with the venv Python):
+    sudo .venv/bin/python batch_generate.py
+    sudo .venv/bin/python batch_generate.py --target-rows 5000
 """
 
 import argparse

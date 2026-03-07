@@ -83,6 +83,17 @@ def _build_classifiers() -> dict:
 
     try:
         from xgboost import XGBClassifier
+
+        # Auto-detect CUDA availability; fall back to CPU if no GPU is present.
+        _xgb_device = "cpu"
+        try:
+            import subprocess as _sp
+            _nv = _sp.run(["nvidia-smi"], capture_output=True)
+            if _nv.returncode == 0:
+                _xgb_device = "cuda"
+        except FileNotFoundError:
+            pass
+
         classifiers["XGBoost"] = XGBClassifier(
             n_estimators=200,
             max_depth=6,
@@ -91,10 +102,10 @@ def _build_classifiers() -> dict:
             eval_metric="logloss",
             random_state=42,
             tree_method="hist",
-            device="cuda",
+            device=_xgb_device,
             n_jobs=-1,
         )
-        logger.info("XGBoost available — including it in the comparison.")
+        logger.info("XGBoost available (device=%s) — including it in the comparison.", _xgb_device)
     except ImportError:
         logger.info("XGBoost not installed — using Gradient Boosting instead.")
         classifiers["Gradient Boosting"] = GradientBoostingClassifier(

@@ -49,6 +49,15 @@ def capture_traffic(
             "Download it from https://npcap.com/ and install with 'WinPcap API-compatible Mode' enabled.\n"
             "Then restart your terminal and try again."
         )
+    # On Linux, verify libpcap is available
+    elif os.name == "posix" and sys.platform != "darwin":
+        import shutil
+        if not shutil.which("tcpdump") and not os.path.exists("/usr/lib/libpcap.so"):
+            logger.warning(
+                "libpcap does not appear to be installed. Packet capture requires libpcap on Linux.\n"
+                "Install it with: sudo apt install libpcap-dev\n"
+                "Then try again."
+            )
 
     os.makedirs(output_dir, exist_ok=True)
     timestamp = int(time.time())
