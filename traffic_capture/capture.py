@@ -12,6 +12,7 @@ Usage (usually called from the orchestrator, but can be run standalone):
 import argparse
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -99,7 +100,8 @@ def capture_traffic(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Packet capture for MCP traffic classification")
-    parser.add_argument("--interface", default="lo", help="Network interface to sniff on")
+    default_iface = r"\Device\NPF_Loopback" if os.name == "nt" else ("lo0" if sys.platform == "darwin" else "lo")
+    parser.add_argument("--interface", default=default_iface, help="Network interface to sniff on")
     parser.add_argument(
         "--ports-mcp",
         nargs="+",

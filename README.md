@@ -74,7 +74,7 @@ MCP_Project/
 | **Python 3.11+** | Required by the `mcp` SDK and type-hint syntax used throughout the project |
 | **pip** | To install Python dependencies from `requirements.txt` |
 | **Root / Administrator privileges** | Scapy needs raw-socket access for packet capture (`sudo` on Linux/macOS) |
-| **Loopback interface** (`lo` on Linux, `lo0` on macOS) | Default capture interface; all servers bind to `localhost` |
+| **Loopback interface** (`lo` on Linux, `lo0` on macOS, auto-detected on Windows) | Default capture interface; all servers bind to `localhost` |
 | **Git** | To clone this repository |
 
 ### Platform notes
@@ -83,7 +83,7 @@ MCP_Project/
 |---|---|
 | **Linux** | Works out of the box. Use `lo` as the capture interface. |
 | **macOS** | Use `lo0` instead of `lo` (e.g. `--interface lo0`). You may need to install Xcode command-line tools (`xcode-select --install`). |
-| **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. Run commands in an Administrator terminal. Use `\\Device\\NPF_Loopback` or the name reported by `scapy.all.get_if_list()` as the interface. |
+| **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. Run commands in an **Administrator** PowerShell. The loopback interface is auto-detected (`\Device\NPF_Loopback`); you can also check with `python -c "from scapy.all import get_if_list; print(get_if_list())"`. |
 
 ---
 
@@ -98,10 +98,16 @@ cd MCP_Project
 
 ### 2. Create a virtual environment (recommended)
 
+**Linux / macOS:**
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-# .venv\Scripts\activate         # Windows
+source .venv/bin/activate
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install dependencies
@@ -138,6 +144,7 @@ model evaluation. Each step can also be run independently — see
 The orchestrator starts all servers, generates traffic, captures packets, and
 saves labelled pcap files — all in one command:
 
+**Linux:**
 ```bash
 sudo python -m traffic_capture.orchestrator \
     --duration 60 \
@@ -147,12 +154,34 @@ sudo python -m traffic_capture.orchestrator \
     --output-dir data/pcap
 ```
 
+**macOS:**
+```bash
+sudo python -m traffic_capture.orchestrator \
+    --duration 60 \
+    --requests 100 \
+    --mcp-sessions 5 \
+    --interface lo0 \
+    --output-dir data/pcap
+```
+
+**Windows (Administrator PowerShell):**
+```powershell
+python -m traffic_capture.orchestrator `
+    --duration 60 `
+    --requests 100 `
+    --mcp-sessions 5 `
+    --output-dir data/pcap
+```
+
+> **Note:** On Windows the loopback interface is auto-detected. You do not
+> need `sudo` — just run from an **Administrator** PowerShell.
+
 | Option | Default | Description |
 |---|---|---|
 | `--duration` | 60 | Traffic generation duration in seconds |
 | `--requests` | 50 | Requests per generator |
 | `--mcp-sessions` | 3 | Concurrent MCP client sessions |
-| `--interface` | `lo` | Network interface to capture on (`lo0` on macOS) |
+| `--interface` | auto-detected | Network interface to capture on (`lo` on Linux, `lo0` on macOS, `\Device\NPF_Loopback` on Windows) |
 | `--output-dir` | `data/pcap` | Where pcap files are saved |
 | `--no-capture` | — | Skip packet capture, only generate traffic |
 
@@ -355,12 +384,22 @@ python -m non_mcp_traffic.tcp_traffic --host localhost --port 5002 --connections
 
 Generate more traffic by raising `--duration` and `--requests`:
 
+**Linux:**
 ```bash
 sudo python -m traffic_capture.orchestrator \
     --duration 300 \
     --requests 500 \
     --mcp-sessions 10 \
     --interface lo \
+    --output-dir data/pcap
+```
+
+**Windows (Administrator PowerShell):**
+```powershell
+python -m traffic_capture.orchestrator `
+    --duration 300 `
+    --requests 500 `
+    --mcp-sessions 10 `
     --output-dir data/pcap
 ```
 
@@ -411,6 +450,13 @@ python -m feature_extraction.extractor \
     --output data/features.csv
 ```
 
+**Windows:**
+```powershell
+python -m feature_extraction.extractor `
+    --pcap-dir C:\path\to\your\pcaps `
+    --output data/features.csv
+```
+
 ---
 
 ## Data Directory Layout
@@ -436,15 +482,23 @@ models/
 
 Make sure you installed all dependencies inside an active virtual environment:
 
+**Linux / macOS:**
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**Windows (PowerShell):**
+```powershell
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
 ### `PermissionError` or `Operation not permitted` during packet capture
 
-Scapy needs raw-socket access. Run the orchestrator (or `capture.py`) with
-`sudo`:
+Scapy needs raw-socket access.
+
+**Linux / macOS:** Run the orchestrator (or `capture.py`) with `sudo`:
 
 ```bash
 sudo python -m traffic_capture.orchestrator ...
@@ -456,9 +510,16 @@ On macOS with a virtual environment, pass the full path to the venv Python:
 sudo .venv/bin/python -m traffic_capture.orchestrator --interface lo0 ...
 ```
 
+**Windows:** Run PowerShell as **Administrator** (right-click → *Run as administrator*) and ensure [Npcap](https://npcap.com/) is installed:
+
+```powershell
+python -m traffic_capture.orchestrator ...
+```
+
 ### `OSError: No such device` (wrong network interface)
 
-Use `lo` on Linux or `lo0` on macOS. To list available interfaces:
+Use `lo` on Linux, `lo0` on macOS, or omit `--interface` on Windows
+(it auto-detects `\Device\NPF_Loopback`). To list available interfaces:
 
 ```bash
 python -c "from scapy.all import get_if_list; print(get_if_list())"

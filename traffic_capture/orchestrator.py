@@ -19,11 +19,14 @@ import argparse
 import asyncio
 import logging
 import os
+import platform
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+IS_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -43,28 +46,37 @@ def _python() -> str:
 
 def _start(args: list[str], **kwargs) -> subprocess.Popen:
     logger.info("Starting: %s", " ".join(args))
-    return subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
-        **kwargs,
-    )
+    popen_kwargs: dict = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if IS_WINDOWS:
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["preexec_fn"] = os.setsid
+    popen_kwargs.update(kwargs)
+    return subprocess.Popen(args, **popen_kwargs)
 
 
 def _stop(proc: subprocess.Popen, name: str) -> None:
     if proc.poll() is None:
         logger.info("Stopping %s (pid %d)", name, proc.pid)
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
+            if IS_WINDOWS:
+                proc.terminate()
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, OSError):
             pass
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
+                if IS_WINDOWS:
+                    proc.kill()
+                else:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
                 pass
 
 
@@ -135,12 +147,25 @@ def _start_tcp_echo_server(host: str = "0.0.0.0", port: int = TCP_PORT) -> subpr
         "        await server.serve_forever()",
         "asyncio.run(main())",
     ])
-    return subprocess.Popen(
-        [_python(), "-c", code],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
-    )
+    popen_kwargs: dict = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if IS_WINDOWS:
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["preexec_fn"] = os.setsid
+    return subprocess.Popen([_python(), "-c", code], **popen_kwargs)
+
+
+def _default_loopback_interface() -> str:
+    """Return the platform-appropriate default loopback interface name."""
+    system = platform.system()
+    if system == "Windows":
+        return r"\Device\NPF_Loopback"
+    elif system == "Darwin":
+        return "lo0"
+    return "lo"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +176,7 @@ def run_pipeline(
     duration: int = 60,
     num_requests: int = 50,
     mcp_sessions: int = 3,
-    interface: str = "lo",
+    interface: str = "",
     output_dir: str = DATA_DIR,
     capture: bool = True,
 ) -> None:
@@ -167,6 +192,8 @@ def run_pipeline(
     output_dir:    Directory to save pcap files
     capture:       Whether to run the packet capture step
     """
+    if not interface:
+        interface = _default_loopback_interface()
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     procs: dict[str, subprocess.Popen] = {}
 
@@ -273,7 +300,10 @@ def main() -> None:
     parser.add_argument("--duration", type=int, default=60, help="Traffic duration in seconds")
     parser.add_argument("--requests", type=int, default=50, help="Requests per generator")
     parser.add_argument("--mcp-sessions", type=int, default=3, help="Concurrent MCP sessions")
-    parser.add_argument("--interface", default="lo", help="Network interface for capture")
+    parser.add_argument(
+        "--interface", default="",
+        help="Network interface for capture (default: auto-detect per platform)",
+    )
     parser.add_argument("--output-dir", default=DATA_DIR, help="Directory for pcap files")
     parser.add_argument(
         "--no-capture", action="store_true", help="Skip packet capture (generate traffic only)"
