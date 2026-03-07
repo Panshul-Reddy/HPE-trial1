@@ -196,7 +196,9 @@ def main() -> None:
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
     args = parser.parse_args()
 
-    mcp.run(transport="sse", host=args.host, port=args.port)
+    mcp.settings.host = args.host
+    mcp.settings.port = args.port
+    mcp.run(transport="sse")
 
 
 if __name__ == "__main__":

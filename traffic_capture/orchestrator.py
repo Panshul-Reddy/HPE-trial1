@@ -162,7 +162,22 @@ def _default_loopback_interface() -> str:
     """Return the platform-appropriate default loopback interface name."""
     system = platform.system()
     if system == "Windows":
-        return r"\Device\NPF_Loopback"
+        # Npcap loopback adapter name varies; scan for it
+        try:
+            from scapy.all import get_if_list, conf
+            # Try to find interface with 'Loopback' in description
+            for iface_id, iface_obj in conf.ifaces.items():
+                desc = getattr(iface_obj, 'description', '') or ''
+                name = getattr(iface_obj, 'name', '') or ''
+                if 'loopback' in desc.lower() or 'loopback' in name.lower():
+                    return iface_id
+            # Fallback: check interface list for NPF_Loopback
+            for iface in get_if_list():
+                if 'loopback' in iface.lower():
+                    return iface
+        except Exception:
+            pass
+        return r"\Device\NPF_Loopback"  # last-resort default
     elif system == "Darwin":
         return "lo0"
     return "lo"
@@ -287,8 +302,20 @@ def run_pipeline(
 
     finally:
         # ------------------------------------------------------------------ #
-        # 4. Stop servers (capture stops on its own after duration)
+        # 4. Stop servers; let capture finish writing pcap files
         # ------------------------------------------------------------------ #
+
+        # Wait for capture to finish naturally (it has its own duration timer)
+        capture_proc = procs.pop("capture", None)
+        if capture_proc is not None and capture_proc.poll() is None:
+            logger.info("Waiting for capture process to finish and save pcap files…")
+            try:
+                capture_proc.wait(timeout=duration + 15)
+            except subprocess.TimeoutExpired:
+                logger.warning("Capture process did not finish in time, stopping it.")
+                _stop(capture_proc, "capture")
+
+        # Now stop all remaining servers
         for name, proc in procs.items():
             _stop(proc, name)
 

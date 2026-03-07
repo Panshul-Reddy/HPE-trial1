@@ -83,7 +83,7 @@ MCP_Project/
 |---|---|
 | **Linux** | Works out of the box. Use `lo` as the capture interface. |
 | **macOS** | Use `lo0` instead of `lo` (e.g. `--interface lo0`). You may need to install Xcode command-line tools (`xcode-select --install`). |
-| **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. Run commands in an **Administrator** PowerShell. The loopback interface is auto-detected (`\Device\NPF_Loopback`); you can also check with `python -c "from scapy.all import get_if_list; print(get_if_list())"`. |
+| **Windows** | Install [Npcap](https://npcap.com/) for Scapy packet capture. During installation, enable **"Support loopback traffic"** and **"WinPcap API-compatible Mode"**. Run commands in an **Administrator** PowerShell. The loopback interface is auto-detected; you can verify with `python -c "from scapy.all import get_if_list; print(get_if_list())"`. |
 
 ---
 

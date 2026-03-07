@@ -38,9 +38,17 @@ def capture_traffic(
     Returns a dict mapping label -> path for each saved pcap file.
     """
     try:
-        from scapy.all import AsyncSniffer, wrpcap
+        from scapy.all import AsyncSniffer, wrpcap, conf
     except ImportError as exc:
         raise ImportError("scapy is required for packet capture. Install it with: pip install scapy") from exc
+
+    # On Windows, verify Npcap is available
+    if os.name == "nt" and not conf.use_pcap:
+        logger.warning(
+            "Npcap is not installed. Packet capture requires Npcap on Windows.\n"
+            "Download it from https://npcap.com/ and install with 'WinPcap API-compatible Mode' enabled.\n"
+            "Then restart your terminal and try again."
+        )
 
     os.makedirs(output_dir, exist_ok=True)
     timestamp = int(time.time())
