@@ -27,9 +27,12 @@ from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
+    accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
+    precision_score,
+    recall_score,
 )
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -40,8 +43,8 @@ warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# Features to drop before training (identifiers, not predictive)
-_DROP_COLS = ["src_ip", "dst_ip", "label"]
+# Features to drop before training (identifiers and port info that leaks labels)
+_DROP_COLS = ["src_ip", "dst_ip", "src_port", "dst_port", "protocol", "label"]
 
 
 def load_and_prepare(csv_path: str) -> tuple[pd.DataFrame, pd.Series, LabelEncoder]:
@@ -87,6 +90,8 @@ def _build_classifiers() -> dict:
             use_label_encoder=False,
             eval_metric="logloss",
             random_state=42,
+            tree_method="hist",
+            device="cuda",
             n_jobs=-1,
         )
         logger.info("XGBoost available — including it in the comparison.")
@@ -148,22 +153,35 @@ def train(
         clf.fit(X_train, y_train)
         y_pred = clf.predict(X_test)
         test_f1 = f1_score(y_test, y_pred, average="weighted")
-        print(f"  Test F1 (weighted): {test_f1:.4f}")
+        test_acc = accuracy_score(y_test, y_pred)
+        test_prec = precision_score(y_test, y_pred, average="weighted")
+        test_rec = recall_score(y_test, y_pred, average="weighted")
+
+        print(f"  Accuracy:           {test_acc:.4f}  ({test_acc*100:.1f}%)")
+        print(f"  Precision:          {test_prec:.4f}")
+        print(f"  Recall:             {test_rec:.4f}")
+        print(f"  F1-score:           {test_f1:.4f}")
+        print(f"  Misclassified:      {(y_test != y_pred).sum()} / {len(y_test)}")
+        print()
         print(classification_report(y_test, y_pred, target_names=le.classes_))
 
         cm = confusion_matrix(y_test, y_pred)
         print("  Confusion matrix:")
         print(cm)
 
-        results[name] = {"model": clf, "test_f1": test_f1, "cv_mean": cv_scores.mean()}
+        results[name] = {"model": clf, "test_f1": test_f1, "test_acc": test_acc, "cv_mean": cv_scores.mean()}
 
     # Pick best model
     best_name = max(results, key=lambda n: results[n]["test_f1"])
     best_model = results[best_name]["model"]
     best_f1 = results[best_name]["test_f1"]
 
+    best_acc = results[best_name]["test_acc"]
+
     print("\n" + "=" * 70)
-    print(f"BEST MODEL: {best_name}  (test F1 = {best_f1:.4f})")
+    print(f"BEST MODEL: {best_name}")
+    print(f"  Accuracy:  {best_acc:.4f}  ({best_acc*100:.1f}%)")
+    print(f"  F1-score:  {best_f1:.4f}")
     print("=" * 70)
 
     # Feature importance (if available)

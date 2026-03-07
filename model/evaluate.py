@@ -16,12 +16,12 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, precision_score, recall_score
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-_DROP_COLS = ["src_ip", "dst_ip", "label"]
+_DROP_COLS = ["src_ip", "dst_ip", "src_port", "dst_port", "protocol", "label"]
 
 
 def load_model(model_path: str) -> tuple:
@@ -54,13 +54,21 @@ def evaluate(model_path: str, features_csv: str) -> None:
 
     y_pred = model.predict(X)
 
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, average="weighted")
+    rec = recall_score(y_true, y_pred, average="weighted")
     f1 = f1_score(y_true, y_pred, average="weighted")
+    misclassified = (y_true != y_pred).sum()
 
     print("\n" + "=" * 60)
     print(f"Evaluation on: {features_csv}")
     print(f"Model:         {model_path}")
     print("=" * 60)
-    print(f"\nWeighted F1-score: {f1:.4f}")
+    print(f"\n  Accuracy:      {acc:.4f}  ({acc*100:.1f}%)")
+    print(f"  Precision:     {prec:.4f}")
+    print(f"  Recall:        {rec:.4f}")
+    print(f"  F1-score:      {f1:.4f}")
+    print(f"  Misclassified: {misclassified} / {len(y_true)}")
     print("\nClassification Report:")
     print(classification_report(y_true, y_pred, target_names=le.classes_))
     print("Confusion Matrix:")

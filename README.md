@@ -63,7 +63,10 @@ MCP_Project/
 ├── model/
 │   ├── train.py                  # Train & evaluate Random Forest / XGBoost / Logistic Regression
 │   └── evaluate.py               # Evaluate a saved model on new data
-└── batch_generate.py             # Automated batch runner to generate large datasets (e.g. 10 000+ rows)
+├── batch_generate.py             # Automated batch runner to generate large datasets (e.g. 10 000+ rows)
+└── results/
+    ├── training_results.txt      # Saved training metrics for all classifiers
+    └── evaluation_results.txt    # Saved evaluation metrics on unseen test data
 ```
 
 ---
@@ -140,10 +143,31 @@ This section walks through the **entire pipeline** from traffic generation to
 model evaluation. Each step can also be run independently — see
 [Running Components Individually](#running-components-individually).
 
-### Step 1 — Generate traffic and capture packets
+### Step 1 — Generate training dataset
 
 The orchestrator starts all servers, generates traffic, captures packets, and
-saves labelled pcap files — all in one command:
+saves labelled pcap files. For a large dataset (recommended: 10 000+ rows),
+use the batch generator which loops automatically:
+
+**Linux / macOS:**
+```bash
+sudo python batch_generate.py --target-rows 10000
+```
+
+**Windows (Administrator PowerShell):**
+```powershell
+python batch_generate.py --target-rows 10000
+```
+
+This runs the orchestrator in a loop, extracting features after each iteration,
+and stops once the target row count is reached. Output:
+- `data/pcap/` — accumulated pcap files
+- `data/features.csv` — training dataset (~10 000+ rows)
+
+> **Tip:** Typical yield is ~1 500–2 000 flows per iteration. For 10 000 rows
+> expect ~6 iterations taking ~7 minutes total.
+
+Alternatively, run a single orchestrator pass (fewer rows):
 
 **Linux:**
 ```bash
@@ -178,6 +202,14 @@ python -m traffic_capture.orchestrator `
     --ws-sessions 3 `
     --tcp-connections 3 `
     --output-dir data/pcap
+```
+
+Then extract features manually:
+
+```powershell
+python -m feature_extraction.extractor `
+    --pcap-dir data/pcap `
+    --output data/features.csv
 ```
 
 > **Note:** On Windows the loopback interface is auto-detected. You do not
@@ -259,6 +291,11 @@ columns:
 | Idle time | `idle_time_{mean,std,max}` |
 | Ports | `src_port`, `dst_port`, `protocol` |
 
+> **Note:** Port-related features (`src_port`, `dst_port`, `protocol`) are
+> extracted to the CSV but are **automatically dropped during training** to
+> prevent data leakage — otherwise the model would simply learn
+> "port 8000 = MCP" instead of learning actual traffic patterns.
+
 ### Step 3 — Train models
 
 **Linux / macOS:**
@@ -284,7 +321,7 @@ Three classifiers are compared:
 | Classifier | Notes |
 |---|---|
 | **Random Forest** | 200 trees, no depth limit |
-| **XGBoost** | 200 rounds, learning rate 0.1 (falls back to Gradient Boosting if xgboost is not installed) |
+| **XGBoost** | 200 rounds, learning rate 0.1, GPU-accelerated (`device=cuda`) if available (falls back to Gradient Boosting if xgboost is not installed) |
 | **Logistic Regression** | StandardScaler + L2 baseline |
 
 The best model by weighted F1-score is saved to `models/best_model.pkl`.
@@ -297,71 +334,104 @@ TRAINING AND EVALUATION
 ======================================================================
 
 --- Random Forest ---
-  CV F1 (mean ± std): 0.9812 ± 0.0134
-  Test F1 (weighted): 0.9850
-              precision    recall  f1-score   support
-         mcp       0.98      0.99      0.98        12
-     non_mcp       0.99      0.98      0.99        35
+  CV F1 (mean ± std): 0.9789 ± 0.0043
+  Accuracy:           0.9811  (98.1%)
+  Precision:          0.9811
+  Recall:             0.9811
+  F1-score:           0.9811
+  Misclassified:      42 / 2219
   ...
 
 --- XGBoost ---
+  Accuracy:           0.9806  (98.1%)
   ...
 
 --- Logistic Regression ---
+  Accuracy:           0.9793  (97.9%)
   ...
 
 ======================================================================
-BEST MODEL: Random Forest  (test F1 = 0.9850)
+BEST MODEL: Random Forest
+  Accuracy:  0.9811  (98.1%)
+  F1-score:  0.9811
 ======================================================================
 
 Top-10 feature importances:
-pkt_size_mean      0.1842
-iat_mean           0.1234
+pkt_size_mean     0.1694
+total_bytes       0.1314
+iat_std           0.1154
 ...
 ```
 
-### Step 4 — Evaluate on new data
+> Full training results are saved in `results/training_results.txt`.
+
+### Step 4 — Evaluate on new data (robustness test)
+
+Generate a completely separate test dataset that the model has **never seen**,
+then evaluate against it:
 
 **Linux / macOS:**
 ```bash
+# Generate test dataset
+sudo python batch_generate.py \
+    --target-rows 2000 \
+    --pcap-dir data/pcap_test \
+    --output data/test_features.csv
+
+# Evaluate the trained model on unseen data
 python -m model.evaluate \
     --model models/best_model.pkl \
-    --features data/features.csv
+    --features data/test_features.csv
 ```
 
-**Windows (PowerShell):**
+**Windows (Administrator PowerShell):**
 ```powershell
+# Generate test dataset
+python batch_generate.py `
+    --target-rows 2000 `
+    --pcap-dir data/pcap_test `
+    --output data/test_features.csv
+
+# Evaluate the trained model on unseen data
 python -m model.evaluate `
     --model models/best_model.pkl `
-    --features data/features.csv
+    --features data/test_features.csv
 ```
+
+> **Important:** The `--pcap-dir data/pcap_test` and `--output data/test_features.csv`
+> flags ensure the test data goes to separate directories — your original
+> training data in `data/features.csv` and `data/pcap/` is NOT overwritten.
 
 Prints a classification report and confusion matrix. If the model supports
 `predict_proba`, per-flow prediction probabilities are written to
-`data/features_predictions.csv`.
+`data/test_features_predictions.csv`.
 
 **Expected output:**
 
 ```
 ============================================================
-Evaluation on: data/features.csv
+Evaluation on: data/test_features.csv
 Model:         models/best_model.pkl
 ============================================================
 
-Weighted F1-score: 0.9850
+  Accuracy:      0.9972  (99.7%)
+  Precision:     0.9972
+  Recall:        0.9972
+  F1-score:      0.9972
+  Misclassified: 6 / 2135
 
 Classification Report:
               precision    recall  f1-score   support
-         mcp       0.98      0.99      0.98        12
-     non_mcp       0.99      0.98      0.99        35
-    accuracy                           0.98        47
-   macro avg       0.98      0.98      0.98        47
-weighted avg       0.99      0.98      0.99        47
+         mcp       0.99      1.00      1.00      1180
+     non_mcp       1.00      0.99      1.00       955
+    accuracy                           1.00      2135
 
 Confusion Matrix:
-[[12  0]
- [ 1 34]]
+[[1180    0]
+ [   6  949]]
 ```
+
+> Full evaluation results are saved in `results/evaluation_results.txt`.
 
 ---
 
@@ -531,15 +601,22 @@ python -m feature_extraction.extractor `
 ```
 data/
 ├── pcap/
-│   ├── mcp_<timestamp>.pcap       # captured MCP packets
-│   └── non_mcp_<timestamp>.pcap   # captured non-MCP packets
-└── features.csv                   # extracted per-flow features
+│   ├── mcp_<timestamp>.pcap       # captured MCP packets (training)
+│   └── non_mcp_<timestamp>.pcap   # captured non-MCP packets (training)
+├── pcap_test/
+│   ├── mcp_<timestamp>.pcap       # captured MCP packets (testing)
+│   └── non_mcp_<timestamp>.pcap   # captured non-MCP packets (testing)
+├── features.csv                   # training dataset (per-flow features)
+└── test_features.csv              # test dataset (per-flow features)
 models/
 └── best_model.pkl                 # saved best classifier
+results/
+├── training_results.txt           # training metrics for all classifiers
+└── evaluation_results.txt         # evaluation metrics on unseen test data
 ```
 
-> Both `data/` and `models/` are in `.gitignore` because they are generated at
-> runtime.
+> `data/` and `models/` are in `.gitignore` because they are generated at
+> runtime. `results/` is tracked in git so metrics are preserved.
 
 ---
 
