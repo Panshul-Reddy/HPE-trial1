@@ -30,7 +30,23 @@ SAMPLE_TEXTS = [
     b"ping server",
     b"list resources",
     b"submit job",
+    b"query database for recent entries",
+    b"fetch configuration parameters",
+    b"update session token",
+    b"heartbeat",
+    b"shutdown gracefully",
+    b"stream telemetry data from sensors",
+    b"authenticate user credentials",
 ]
+
+
+def _random_text_payload() -> bytes:
+    """Generate a text payload with variable length."""
+    if random.random() < 0.5:
+        return random.choice(SAMPLE_TEXTS)
+    # Build a longer text from multiple samples
+    count = random.randint(1, 6)
+    return b" | ".join(random.choices(SAMPLE_TEXTS, k=count))
 
 
 def _frame(msg_type: int, payload: bytes) -> bytes:
@@ -39,11 +55,17 @@ def _frame(msg_type: int, payload: bytes) -> bytes:
 
 
 def _random_message() -> bytes:
-    choice = random.choice(["text", "text", "binary", "ping"])
+    choice = random.choice(["text", "text", "text", "binary", "binary", "ping"])
     if choice == "text":
-        return _frame(MSG_TYPE_TEXT, random.choice(SAMPLE_TEXTS))
+        return _frame(MSG_TYPE_TEXT, _random_text_payload())
     if choice == "binary":
-        size = random.randint(8, 256)
+        # Wide range: 4 bytes to 4 KB
+        size = random.choice([
+            random.randint(4, 32),       # tiny
+            random.randint(32, 256),     # small
+            random.randint(256, 1024),   # medium
+            random.randint(1024, 4096),  # large
+        ])
         return _frame(MSG_TYPE_BINARY, bytes(random.getrandbits(8) for _ in range(size)))
     return _frame(MSG_TYPE_PING, b"")
 
@@ -54,7 +76,7 @@ async def _tcp_session(host: str, port: int, num_messages: int, session_id: int)
     sent = 0
     conn_id = 0
     while sent < num_messages:
-        msgs_this_conn = min(random.randint(1, 4), num_messages - sent)
+        msgs_this_conn = min(random.randint(1, 10), num_messages - sent)
         try:
             reader, writer = await asyncio.open_connection(host, port)
             for _ in range(msgs_this_conn):
@@ -70,7 +92,14 @@ async def _tcp_session(host: str, port: int, num_messages: int, session_id: int)
                 except (asyncio.TimeoutError, asyncio.IncompleteReadError):
                     pass
 
-                await asyncio.sleep(random.uniform(0.01, 0.08))
+                # Bursty timing pattern
+                r = random.random()
+                if r < 0.3:
+                    await asyncio.sleep(random.uniform(0.001, 0.02))   # burst
+                elif r < 0.8:
+                    await asyncio.sleep(random.uniform(0.02, 0.1))     # normal
+                else:
+                    await asyncio.sleep(random.uniform(0.15, 0.5))     # idle gap
 
             writer.close()
             await writer.wait_closed()

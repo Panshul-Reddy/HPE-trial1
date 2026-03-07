@@ -15,6 +15,7 @@ Usage (run from project root with venv activated, with elevated privileges):
 
 import argparse
 import os
+import random
 import re
 import subprocess
 import sys
@@ -24,12 +25,19 @@ from pathlib import Path
 PCAP_DIR = "data/pcap"
 OUTPUT_CSV = "data/features.csv"
 
-# Per-run settings (tuned for maximum flow yield per iteration)
-DURATION = 60            # seconds per run
-REQUESTS = 500           # requests per generator per run
+# Per-run settings — base values; each iteration randomizes around these
+DURATION = 60            # base seconds per run
+REQUESTS = 500           # base requests per generator per run
 MCP_SESSIONS = 8
 WS_SESSIONS = 6
 TCP_CONNECTIONS = 6
+
+# Variation ranges (each iteration picks randomly within these)
+_DURATION_RANGE = (30, 90)
+_REQUESTS_RANGE = (200, 800)
+_MCP_SESSIONS_RANGE = (2, 12)
+_WS_SESSIONS_RANGE = (2, 10)
+_TCP_CONNECTIONS_RANGE = (2, 10)
 
 
 def _python() -> str:
@@ -108,17 +116,27 @@ def main() -> None:
 
     while total_rows < target and iteration < args.max_iterations:
         iteration += 1
+
+        # Randomize parameters this iteration for traffic diversity
+        iter_duration = random.randint(*_DURATION_RANGE)
+        iter_requests = random.randint(*_REQUESTS_RANGE)
+        iter_mcp_sessions = random.randint(*_MCP_SESSIONS_RANGE)
+        iter_ws_sessions = random.randint(*_WS_SESSIONS_RANGE)
+        iter_tcp_connections = random.randint(*_TCP_CONNECTIONS_RANGE)
+
         print(f"--- Iteration {iteration} ---")
+        print(f"  Params: duration={iter_duration}s, requests={iter_requests}, "
+              f"mcp_sess={iter_mcp_sessions}, ws_sess={iter_ws_sessions}, tcp_conn={iter_tcp_connections}")
         t0 = time.time()
 
         # Run one orchestrator iteration
         cmd = [
             _python(), "-m", "traffic_capture.orchestrator",
-            "--duration", str(args.duration),
-            "--requests", str(args.requests),
-            "--mcp-sessions", str(MCP_SESSIONS),
-            "--ws-sessions", str(WS_SESSIONS),
-            "--tcp-connections", str(TCP_CONNECTIONS),
+            "--duration", str(iter_duration),
+            "--requests", str(iter_requests),
+            "--mcp-sessions", str(iter_mcp_sessions),
+            "--ws-sessions", str(iter_ws_sessions),
+            "--tcp-connections", str(iter_tcp_connections),
             "--output-dir", pcap_dir,
         ]
         print(f"  Running: {' '.join(cmd)}")

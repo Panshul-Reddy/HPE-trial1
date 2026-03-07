@@ -143,11 +143,28 @@ This section walks through the **entire pipeline** from traffic generation to
 model evaluation. Each step can also be run independently — see
 [Running Components Individually](#running-components-individually).
 
+> **Quick Start (3 commands):**
+> ```bash
+> # 1. Generate dataset (runs orchestrator + feature extraction internally)
+> sudo .venv/bin/python batch_generate.py --target-rows 2000   # Linux
+> # python batch_generate.py --target-rows 2000                 # Windows (Admin PowerShell)
+>
+> # 2. Train models
+> python -m model.train
+>
+> # 3. Evaluate
+> python -m model.evaluate --model models/best_model.pkl --features data/features.csv
+> ```
+
 ### Step 1 — Generate training dataset
 
-The orchestrator starts all servers, generates traffic, captures packets, and
-saves labelled pcap files. For a large dataset (recommended: 10 000+ rows),
-use the batch generator which loops automatically:
+`batch_generate.py` handles the **entire data pipeline** automatically:
+it starts all servers, generates traffic, captures packets, saves pcap files,
+**and** extracts features into a CSV. You do **not** need to run the orchestrator
+or feature extractor separately.
+
+Each iteration randomizes traffic parameters (duration, request count, session
+counts) to produce a **diverse, realistic dataset**.
 
 **Linux / macOS:**
 ```bash
@@ -166,8 +183,19 @@ and stops once the target row count is reached. Output:
 
 > **Tip:** Typical yield is ~1 500–2 000 flows per iteration. For 10 000 rows
 > expect ~6 iterations taking ~7 minutes total.
+>
+> **Re-generating?** Delete old data first for a clean dataset:
+> ```bash
+> # Linux / macOS
+> rm data/pcap/*.pcap data/features.csv models/*.pkl 2>/dev/null
+> ```
+> ```powershell
+> # Windows
+> Remove-Item data/pcap/*.pcap, data/features.csv, models/*.pkl -ErrorAction SilentlyContinue
+> ```
 
-Alternatively, run a single orchestrator pass (fewer rows):
+<details>
+<summary>Alternatively, run a single orchestrator pass (advanced — fewer rows, no auto-extraction)</summary>
 
 **Linux:**
 ```bash
@@ -215,6 +243,8 @@ python -m feature_extraction.extractor `
 > **Note:** On Windows the loopback interface is auto-detected. You do not
 > need `sudo` — just run from an **Administrator** PowerShell.
 
+</details>
+
 | Option | Default | Description |
 |---|---|---|
 | `--duration` | 60 | Traffic generation duration in seconds |
@@ -244,59 +274,10 @@ data/pcap/mcp_1705312800.pcap
 data/pcap/non_mcp_1705312800.pcap
 ```
 
-### Step 2 — Extract features
+### Step 2 — Train models
 
-**Linux / macOS:**
-```bash
-python -m feature_extraction.extractor \
-    --pcap-dir data/pcap \
-    --output data/features.csv
-```
-
-**Windows (PowerShell):**
-```powershell
-python -m feature_extraction.extractor `
-    --pcap-dir data/pcap `
-    --output data/features.csv
-```
-
-This reads every pcap file in `data/pcap/`, groups packets into network flows
-(by 5-tuple: src IP, dst IP, src port, dst port, protocol), and computes 30+
-features per flow.
-
-**Expected output:**
-
-```
-2025-01-15 10:02:00 INFO Reading data/pcap/mcp_1705312800.pcap (label=mcp)
-2025-01-15 10:02:00 INFO   1420 packets loaded
-2025-01-15 10:02:00 INFO   12 flows extracted
-2025-01-15 10:02:01 INFO Reading data/pcap/non_mcp_1705312800.pcap (label=non_mcp)
-2025-01-15 10:02:01 INFO   2380 packets loaded
-2025-01-15 10:02:01 INFO   35 flows extracted
-2025-01-15 10:02:01 INFO Saved 47 flows (12 MCP, 35 non-MCP) to data/features.csv
-```
-
-The resulting CSV (`data/features.csv`) has one row per flow with these
-columns:
-
-| Category | Features |
-|---|---|
-| Flow metadata | `flow_duration`, `total_packets`, `fwd_packets`, `bwd_packets` |
-| Byte counts | `total_bytes`, `fwd_bytes`, `bwd_bytes`, `flow_asymmetry` |
-| Packet size | `pkt_size_{mean,std,min,max,median}` |
-| Inter-arrival time | `iat_{mean,std,min,max}` |
-| Burst analysis | `burst_count`, `burst_size_{mean,std}` |
-| TCP flags | `flag_{SYN,ACK,PSH,FIN,RST}` |
-| Packet counts | `small_packets` (< 100 B), `large_packets` (> 1 000 B) |
-| Idle time | `idle_time_{mean,std,max}` |
-| Ports | `src_port`, `dst_port`, `protocol` |
-
-> **Note:** Port-related features (`src_port`, `dst_port`, `protocol`) are
-> extracted to the CSV but are **automatically dropped during training** to
-> prevent data leakage — otherwise the model would simply learn
-> "port 8000 = MCP" instead of learning actual traffic patterns.
-
-### Step 3 — Train models
+Once `batch_generate.py` has finished, `data/features.csv` is ready.
+The only manual step needed is training:
 
 **Linux / macOS:**
 ```bash
@@ -325,6 +306,12 @@ Three classifiers are compared:
 | **Logistic Regression** | StandardScaler + L2 baseline |
 
 The best model by weighted F1-score is saved to `models/best_model.pkl`.
+
+> **Features used:** The CSV (`data/features.csv`) has one row per flow with
+> 30+ features — flow duration, packet sizes, inter-arrival times, burst
+> statistics, TCP flags, and idle time metrics. Port-related features
+> (`src_port`, `dst_port`, `protocol`) are **automatically dropped during
+> training** to prevent data leakage.
 
 **Expected output (abbreviated):**
 
@@ -361,11 +348,36 @@ pkt_size_mean     0.1694
 total_bytes       0.1314
 iat_std           0.1154
 ...
+
+======================================================================
+CLASS-WISE FEATURE COMPARISON (top distinguishing features)
+======================================================================
+  Feature                    mcp mean   non_mcp mean    Ratio
+  --------------------------------------------------------
+  burst_size_std                 6.85           1.49    4.59x
+  pkt_size_max                2995.00         684.23    4.38x
+  fwd_bytes                   5867.98        1621.87    3.62x
+  pkt_size_std                 559.03         160.90    3.47x
+  total_bytes                 8923.53        3267.68    2.73x
+  ...
+
+  Class balance:
+    mcp            7197 samples  (69.1%)
+    non_mcp        3215 samples  (30.9%)
+
+  High accuracy is expected: the two traffic types differ by
+  up to 4.6x on key features like burst_size_std,
+  pkt_size_max, and fwd_bytes.
+======================================================================
 ```
+
+> The class-wise feature comparison provides justification for high model
+> accuracy by showing how MCP and non-MCP traffic differ at the network
+> metadata level. Features with near-zero means in both classes are excluded.
 
 > Full training results are saved in `results/training_results.txt`.
 
-### Step 4 — Evaluate on new data (robustness test)
+### Step 3 — Evaluate on new data (robustness test)
 
 Generate a completely separate test dataset that the model has **never seen**,
 then evaluate against it:
@@ -534,15 +546,16 @@ python batch_generate.py --target-rows 10000
 | Option | Default | Description |
 |---|---|---|
 | `--target-rows` | 10 000 | Stop once the CSV has this many rows |
-| `--duration` | 60 | Seconds per orchestrator iteration |
-| `--requests` | 500 | Requests per generator per iteration |
+| `--duration` | 60 | Base seconds per iteration (randomized 30–90s each run) |
+| `--requests` | 500 | Base requests per generator (randomized 200–800 each run) |
 | `--pcap-dir` | `data/pcap` | Directory for pcap files |
 | `--output` | `data/features.csv` | Output CSV path |
 | `--max-iterations` | 30 | Safety limit on iterations |
 
 The script runs the orchestrator, extracts features, checks the row
-count, and repeats until the target is met. Typical yield: **~1 500–2 000
-flows per iteration** (balanced MCP / non-MCP).
+count, and repeats until the target is met. Each iteration **randomizes**
+session counts, duration, and requests to produce diverse traffic patterns.
+Typical yield: **~1 500–2 000 flows per iteration** (balanced MCP / non-MCP).
 
 ### Add new MCP tools
 

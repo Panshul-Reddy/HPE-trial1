@@ -28,6 +28,45 @@ SAMPLE_PAYLOADS = [
 ]
 
 
+def _random_payload() -> dict:
+    """Generate a payload with variable size and structure for diversity."""
+    r = random.random()
+    if r < 0.25:
+        # Tiny payload (few bytes)
+        return {"id": random.randint(1, 999)}
+    elif r < 0.50:
+        # Standard payload from templates
+        return random.choice(SAMPLE_PAYLOADS)
+    elif r < 0.75:
+        # Medium payload with random fields
+        words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+                 "golf", "hotel", "india", "juliet", "kilo", "lima"]
+        num_fields = random.randint(3, 10)
+        return {
+            random.choice(words) + str(i): " ".join(
+                random.choices(words, k=random.randint(1, 8))
+            )
+            for i in range(num_fields)
+        }
+    else:
+        # Large nested payload (several KB)
+        items = [
+            {
+                "item_id": random.randint(1, 10000),
+                "name": " ".join(random.choices(
+                    ["widget", "gadget", "tool", "device", "sensor"], k=3
+                )),
+                "description": "x" * random.randint(50, 500),
+                "price": round(random.uniform(1, 9999), 2),
+                "tags": random.sample(
+                    ["new", "sale", "popular", "limited", "premium", "eco"], k=3
+                ),
+            }
+            for _ in range(random.randint(2, 8))
+        ]
+        return {"batch": True, "items": items, "timestamp": time.time()}
+
+
 def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> None:
     """Generate HTTP traffic against base_url."""
     created_ids: list[int] = []
@@ -47,7 +86,7 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
                     r = sess.get(f"{base_url}/items", timeout=5)
 
             elif method == "POST":
-                payload = random.choice(SAMPLE_PAYLOADS)
+                payload = _random_payload()
                 r = sess.post(f"{base_url}/items", json=payload, timeout=5)
                 if r.status_code == 201:
                     new_id = r.json().get("id")
@@ -57,7 +96,7 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
             elif method == "PUT":
                 if created_ids:
                     item_id = random.choice(created_ids)
-                    payload = random.choice(SAMPLE_PAYLOADS)
+                    payload = _random_payload()
                     r = sess.put(f"{base_url}/items/{item_id}", json=payload, timeout=5)
                 else:
                     r = sess.get(f"{base_url}/health", timeout=5)
@@ -79,7 +118,14 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
             sess.close()
 
         if delay > 0:
-            time.sleep(delay * random.uniform(0.5, 1.5))
+            # Bursty timing: some requests fire rapidly, others have long gaps
+            r_val = random.random()
+            if r_val < 0.3:
+                time.sleep(delay * random.uniform(0.05, 0.3))    # burst
+            elif r_val < 0.8:
+                time.sleep(delay * random.uniform(0.5, 1.5))     # normal
+            else:
+                time.sleep(delay * random.uniform(2.0, 5.0))     # idle gap
 
     logger.info("HTTP traffic generator: sent %d requests to %s", num_requests, base_url)
 

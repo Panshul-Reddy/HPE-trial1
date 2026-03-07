@@ -38,23 +38,46 @@ def _random_calculator_call() -> tuple[str, dict[str, Any]]:
     return tool, {"a": a, "b": b}
 
 
+def _random_string(min_len: int = 5, max_len: int = 200) -> str:
+    """Generate a random string of variable length for payload diversity."""
+    words = [
+        "hello", "world", "network", "traffic", "classify", "model",
+        "protocol", "server", "client", "packet", "feature", "extract",
+        "pipeline", "data", "stream", "connection", "session", "request",
+        "response", "analysis", "machine", "learning", "neural", "deep",
+        "transform", "encode", "decode", "binary", "metadata", "flow",
+    ]
+    result = []
+    while len(" ".join(result)) < min_len:
+        result.append(random.choice(words))
+    text = " ".join(result)
+    return text[:max_len]
+
+
 def _random_echo_call() -> tuple[str, dict[str, Any]]:
     tool = random.choice(["echo", "echo_upper", "echo_reversed"])
-    messages = [
-        "hello world",
-        "MCP traffic classification",
-        "test message",
-        "the quick brown fox",
-        "network metadata features",
-    ]
-    return tool, {"message": random.choice(messages)}
+    # Mix short and long messages for payload size variation
+    if random.random() < 0.3:
+        # Short message
+        message = _random_string(3, 20)
+    elif random.random() < 0.7:
+        # Medium message
+        message = _random_string(20, 100)
+    else:
+        # Long message
+        message = _random_string(100, 500)
+    return tool, {"message": message}
 
 
 def _random_weather_call() -> tuple[str, dict[str, Any]]:
     tool = random.choice(["get_weather", "get_forecast"])
-    city = random.choice(["New York", "London", "Tokyo", "Sydney", "Paris"])
+    city = random.choice([
+        "New York", "London", "Tokyo", "Sydney", "Paris",
+        "Berlin", "Mumbai", "São Paulo", "Toronto", "Seoul",
+        "Cairo", "Lagos", "Mexico City", "Bangkok", "Istanbul",
+    ])
     if tool == "get_forecast":
-        return tool, {"city": city, "days": random.randint(1, 7)}
+        return tool, {"city": city, "days": random.randint(1, 10)}
     return tool, {"city": city}
 
 
@@ -62,17 +85,14 @@ def _random_string_call() -> tuple[str, dict[str, Any]]:
     tool = random.choice(
         ["count_words", "count_characters", "to_title_case", "replace_substring", "split_text"]
     )
-    texts = [
-        "hello world from MCP",
-        "network traffic classification project",
-        "machine learning pipeline",
-    ]
-    text = random.choice(texts)
+    # Vary text length for payload diversity
+    text = _random_string(10, random.choice([30, 80, 150, 300]))
     if tool in ("count_words", "count_characters", "to_title_case"):
         return tool, {"text": text}
     if tool == "replace_substring":
-        return tool, {"text": text, "old": "the", "new": "a"}
-    return tool, {"text": text, "delimiter": " "}
+        old_word = random.choice(text.split()) if text.split() else "a"
+        return tool, {"text": text, "old": old_word, "new": "replaced"}
+    return tool, {"text": text, "delimiter": random.choice([" ", ",", "."])}
 
 
 def _random_tool_call() -> tuple[str, dict[str, Any]]:
@@ -100,7 +120,7 @@ async def run_session(url: str, session_id: int, num_requests: int) -> None:
     sent = 0
     conn_id = 0
     while sent < num_requests:
-        reqs_this_conn = min(random.randint(1, 5), num_requests - sent)
+        reqs_this_conn = min(random.randint(1, 12), num_requests - sent)
         try:
             async with sse_client(url=url) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
@@ -121,7 +141,13 @@ async def run_session(url: str, session_id: int, num_requests: int) -> None:
                                 session_id, conn_id, req_idx,
                                 tool_name, kwargs, exc,
                             )
-                        await asyncio.sleep(random.uniform(0.01, 0.1))
+                        # Varied timing: bursty (fast) or relaxed (slow)
+                        if random.random() < 0.3:
+                            await asyncio.sleep(random.uniform(0.001, 0.02))   # burst
+                        elif random.random() < 0.7:
+                            await asyncio.sleep(random.uniform(0.02, 0.15))    # normal
+                        else:
+                            await asyncio.sleep(random.uniform(0.2, 1.0))      # idle gap
 
             sent += reqs_this_conn
             conn_id += 1

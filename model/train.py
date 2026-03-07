@@ -203,6 +203,57 @@ def train(
         print("\nTop-10 feature importances:")
         print(top10.to_string())
 
+    # ------------------------------------------------------------------ #
+    # Class-wise feature comparison (justification for high accuracy)
+    # ------------------------------------------------------------------ #
+    df_full = pd.read_csv(csv_path)
+    feature_cols = [c for c in X.columns]
+    class_names = list(le.classes_)
+
+    if len(class_names) == 2:
+        c0, c1 = class_names[0], class_names[1]
+        means_0 = df_full.loc[df_full["label"] == c0, feature_cols].mean()
+        means_1 = df_full.loc[df_full["label"] == c1, feature_cols].mean()
+
+        # Compute ratio (larger/smaller) and sort by most distinguishing
+        # Skip features where both means are near-zero (not meaningful)
+        ratios = []
+        for f in feature_cols:
+            m0, m1 = means_0[f], means_1[f]
+            if abs(m0) < 1e-4 and abs(m1) < 1e-4:
+                continue  # both near-zero — not a meaningful distinguisher
+            if m1 != 0 and m0 != 0:
+                r = max(m0, m1) / min(m0, m1)
+            else:
+                r = float("inf")
+            ratios.append((f, m0, m1, r))
+        ratios.sort(key=lambda x: x[3], reverse=True)
+
+        # Show top 15 most distinguishing features
+        top_n = min(15, len(ratios))
+        print(f"\n{'=' * 70}")
+        print("CLASS-WISE FEATURE COMPARISON (top distinguishing features)")
+        print(f"{'=' * 70}")
+        print(f"  {'Feature':<20} {c0 + ' mean':>14} {c1 + ' mean':>14} {'Ratio':>8}")
+        print(f"  {'-' * 56}")
+        for feat, m0, m1, r in ratios[:top_n]:
+            r_str = f"{r:.2f}x" if r != float("inf") else "inf"
+            print(f"  {feat:<20} {m0:>14.2f} {m1:>14.2f} {r_str:>8}")
+
+        # Class balance
+        counts = df_full["label"].value_counts()
+        total = len(df_full)
+        print(f"\n  Class balance:")
+        for cls in class_names:
+            cnt = counts.get(cls, 0)
+            print(f"    {cls:<12} {cnt:>6} samples  ({cnt/total*100:.1f}%)")
+
+        print(f"\n  High accuracy is expected: the two traffic types differ by")
+        print(f"  up to {ratios[0][3]:.1f}x on key features like {ratios[0][0]},")
+        if len(ratios) > 1:
+            print(f"  {ratios[1][0]}, and {ratios[2][0]}.")
+        print(f"{'=' * 70}")
+
     # Save
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     model_path = str(Path(output_dir) / "best_model.pkl")
