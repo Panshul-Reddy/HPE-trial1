@@ -91,48 +91,46 @@ def _random_tool_call() -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 async def run_session(url: str, session_id: int, num_requests: int) -> None:
-    """Open one MCP client session and make num_requests tool calls."""
-    logger.info("Session %d: connecting to %s", session_id, url)
-    try:
-        async with sse_client(url=url) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                tools_result = await session.list_tools()
-                tool_names = [t.name for t in tools_result.tools]
-                logger.info(
-                    "Session %d: server exposes %d tools: %s",
-                    session_id,
-                    len(tool_names),
-                    tool_names,
-                )
+    """Open one MCP client session and make num_requests tool calls.
 
-                for req_idx in range(num_requests):
-                    tool_name, kwargs = _random_tool_call()
-                    try:
-                        result = await session.call_tool(tool_name, kwargs)
-                        logger.debug(
-                            "Session %d req %d: %s(%s) -> %s",
-                            session_id,
-                            req_idx,
-                            tool_name,
-                            kwargs,
-                            result,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Session %d req %d: %s(%s) failed: %s",
-                            session_id,
-                            req_idx,
-                            tool_name,
-                            kwargs,
-                            exc,
-                        )
-                    # Small random pause between requests to mimic real usage
-                    await asyncio.sleep(random.uniform(0.05, 0.3))
+    To create more unique flows, each session opens multiple short-lived SSE
+    connections, making a few requests per connection before reconnecting.
+    """
+    logger.info("Session %d: starting %d requests against %s", session_id, num_requests, url)
+    sent = 0
+    conn_id = 0
+    while sent < num_requests:
+        reqs_this_conn = min(random.randint(1, 5), num_requests - sent)
+        try:
+            async with sse_client(url=url) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
 
-        logger.info("Session %d: completed %d requests", session_id, num_requests)
-    except Exception as exc:
-        logger.error("Session %d: connection error: %s", session_id, exc)
+                    for req_idx in range(reqs_this_conn):
+                        tool_name, kwargs = _random_tool_call()
+                        try:
+                            result = await session.call_tool(tool_name, kwargs)
+                            logger.debug(
+                                "Session %d conn %d req %d: %s(%s) -> %s",
+                                session_id, conn_id, req_idx,
+                                tool_name, kwargs, result,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Session %d conn %d req %d: %s(%s) failed: %s",
+                                session_id, conn_id, req_idx,
+                                tool_name, kwargs, exc,
+                            )
+                        await asyncio.sleep(random.uniform(0.01, 0.1))
+
+            sent += reqs_this_conn
+            conn_id += 1
+        except Exception as exc:
+            logger.error("Session %d conn %d: connection error: %s", session_id, conn_id, exc)
+            sent += reqs_this_conn  # avoid infinite loop
+            conn_id += 1
+
+    logger.info("Session %d: completed %d requests across %d connections", session_id, num_requests, conn_id)
 
 
 # ---------------------------------------------------------------------------

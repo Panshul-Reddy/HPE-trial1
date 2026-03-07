@@ -60,9 +60,10 @@ MCP_Project/
 │   └── orchestrator.py           # End-to-end pipeline orchestrator
 ├── feature_extraction/
 │   └── extractor.py              # Per-flow feature extraction pcap → CSV
-└── model/
-    ├── train.py                  # Train & evaluate Random Forest / XGBoost / Logistic Regression
-    └── evaluate.py               # Evaluate a saved model on new data
+├── model/
+│   ├── train.py                  # Train & evaluate Random Forest / XGBoost / Logistic Regression
+│   └── evaluate.py               # Evaluate a saved model on new data
+└── batch_generate.py             # Automated batch runner to generate large datasets (e.g. 10 000+ rows)
 ```
 
 ---
@@ -150,6 +151,8 @@ sudo python -m traffic_capture.orchestrator \
     --duration 60 \
     --requests 100 \
     --mcp-sessions 5 \
+    --ws-sessions 3 \
+    --tcp-connections 3 \
     --interface lo \
     --output-dir data/pcap
 ```
@@ -160,6 +163,8 @@ sudo python -m traffic_capture.orchestrator \
     --duration 60 \
     --requests 100 \
     --mcp-sessions 5 \
+    --ws-sessions 3 \
+    --tcp-connections 3 \
     --interface lo0 \
     --output-dir data/pcap
 ```
@@ -170,6 +175,8 @@ python -m traffic_capture.orchestrator `
     --duration 60 `
     --requests 100 `
     --mcp-sessions 5 `
+    --ws-sessions 3 `
+    --tcp-connections 3 `
     --output-dir data/pcap
 ```
 
@@ -181,6 +188,8 @@ python -m traffic_capture.orchestrator `
 | `--duration` | 60 | Traffic generation duration in seconds |
 | `--requests` | 50 | Requests per generator |
 | `--mcp-sessions` | 3 | Concurrent MCP client sessions |
+| `--ws-sessions` | 3 | Concurrent WebSocket sessions |
+| `--tcp-connections` | 3 | Concurrent TCP connections |
 | `--interface` | auto-detected | Network interface to capture on (`lo` on Linux, `lo0` on macOS, `\Device\NPF_Loopback` on Windows) |
 | `--output-dir` | `data/pcap` | Where pcap files are saved |
 | `--no-capture` | — | Skip packet capture, only generate traffic |
@@ -416,6 +425,8 @@ sudo python -m traffic_capture.orchestrator \
     --duration 300 \
     --requests 500 \
     --mcp-sessions 10 \
+    --ws-sessions 6 \
+    --tcp-connections 6 \
     --interface lo \
     --output-dir data/pcap
 ```
@@ -426,12 +437,42 @@ python -m traffic_capture.orchestrator `
     --duration 300 `
     --requests 500 `
     --mcp-sessions 10 `
+    --ws-sessions 6 `
+    --tcp-connections 6 `
     --output-dir data/pcap
 ```
 
 You can run the orchestrator multiple times — pcap filenames include
 timestamps, so new files are added alongside existing ones. The feature
 extractor will process all pcap files in the directory.
+
+### Batch generation (recommended for large datasets)
+
+Use `batch_generate.py` to automatically loop the orchestrator until a
+target row count is reached:
+
+**Linux / macOS:**
+```bash
+sudo python batch_generate.py --target-rows 10000
+```
+
+**Windows (Administrator PowerShell):**
+```powershell
+python batch_generate.py --target-rows 10000
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--target-rows` | 10 000 | Stop once the CSV has this many rows |
+| `--duration` | 60 | Seconds per orchestrator iteration |
+| `--requests` | 500 | Requests per generator per iteration |
+| `--pcap-dir` | `data/pcap` | Directory for pcap files |
+| `--output` | `data/features.csv` | Output CSV path |
+| `--max-iterations` | 30 | Safety limit on iterations |
+
+The script runs the orchestrator, extracts features, checks the row
+count, and repeats until the target is met. Typical yield: **~1 500–2 000
+flows per iteration** (balanced MCP / non-MCP).
 
 ### Add new MCP tools
 

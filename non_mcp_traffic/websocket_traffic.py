@@ -33,24 +33,34 @@ async def run_ws_session(url: str, num_messages: int, session_id: int = 0) -> No
 
     logger.info("WS session %d: connecting to %s", session_id, url)
     try:
-        async with websockets.connect(url, ping_interval=None) as ws:
-            for _ in range(num_messages):
-                msg_type = random.choice(["ping", "echo", "echo", "time"])
-                if msg_type == "ping":
-                    payload = json.dumps({"type": "ping"})
-                elif msg_type == "echo":
-                    payload = json.dumps({"type": "echo", "data": random.choice(ECHO_TEXTS)})
-                else:
-                    payload = json.dumps({"type": "time"})
+        # Each message batch uses a fresh connection to create more flows
+        msgs_per_conn = max(1, random.randint(1, 5))
+        sent = 0
+        while sent < num_messages:
+            batch = min(msgs_per_conn, num_messages - sent)
+            try:
+                async with websockets.connect(url, ping_interval=None) as ws:
+                    for _ in range(batch):
+                        msg_type = random.choice(["ping", "echo", "echo", "time"])
+                        if msg_type == "ping":
+                            payload = json.dumps({"type": "ping"})
+                        elif msg_type == "echo":
+                            payload = json.dumps({"type": "echo", "data": random.choice(ECHO_TEXTS)})
+                        else:
+                            payload = json.dumps({"type": "time"})
 
-                await ws.send(payload)
-                try:
-                    response = await asyncio.wait_for(ws.recv(), timeout=2.0)
-                    logger.debug("WS session %d: recv %s", session_id, response)
-                except asyncio.TimeoutError:
-                    logger.debug("WS session %d: no response within timeout", session_id)
+                        await ws.send(payload)
+                        try:
+                            response = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                            logger.debug("WS session %d: recv %s", session_id, response)
+                        except asyncio.TimeoutError:
+                            logger.debug("WS session %d: no response within timeout", session_id)
 
-                await asyncio.sleep(random.uniform(0.05, 0.3))
+                        await asyncio.sleep(random.uniform(0.01, 0.1))
+                    sent += batch
+            except Exception as exc:
+                logger.warning("WS session %d: connection error: %s", session_id, exc)
+                sent += batch  # skip to avoid infinite loop
 
         logger.info("WS session %d: completed %d messages", session_id, num_messages)
     except Exception as exc:

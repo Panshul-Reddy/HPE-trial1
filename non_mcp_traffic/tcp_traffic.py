@@ -50,28 +50,37 @@ def _random_message() -> bytes:
 
 async def _tcp_session(host: str, port: int, num_messages: int, session_id: int) -> None:
     logger.info("TCP session %d: connecting to %s:%d", session_id, host, port)
-    try:
-        reader, writer = await asyncio.open_connection(host, port)
-        for _ in range(num_messages):
-            msg = _random_message()
-            writer.write(msg)
-            await writer.drain()
+    # Use short-lived connections: a few messages per connection
+    sent = 0
+    conn_id = 0
+    while sent < num_messages:
+        msgs_this_conn = min(random.randint(1, 4), num_messages - sent)
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            for _ in range(msgs_this_conn):
+                msg = _random_message()
+                writer.write(msg)
+                await writer.drain()
 
-            try:
-                header = await asyncio.wait_for(reader.readexactly(5), timeout=2.0)
-                _, length = struct.unpack("!BI", header)
-                if length > 0:
-                    await asyncio.wait_for(reader.readexactly(length), timeout=2.0)
-            except (asyncio.TimeoutError, asyncio.IncompleteReadError):
-                pass  # server may not respond to all messages
+                try:
+                    header = await asyncio.wait_for(reader.readexactly(5), timeout=2.0)
+                    _, length = struct.unpack("!BI", header)
+                    if length > 0:
+                        await asyncio.wait_for(reader.readexactly(length), timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                    pass
 
-            await asyncio.sleep(random.uniform(0.05, 0.2))
+                await asyncio.sleep(random.uniform(0.01, 0.08))
 
-        writer.close()
-        await writer.wait_closed()
-        logger.info("TCP session %d: done", session_id)
-    except OSError as exc:
-        logger.error("TCP session %d: connection failed: %s", session_id, exc)
+            writer.close()
+            await writer.wait_closed()
+            sent += msgs_this_conn
+            conn_id += 1
+        except OSError as exc:
+            logger.error("TCP session %d conn %d: failed: %s", session_id, conn_id, exc)
+            sent += msgs_this_conn  # skip to avoid infinite loop
+            conn_id += 1
+    logger.info("TCP session %d: done (%d connections)", session_id, conn_id)
 
 
 async def run_tcp_traffic(

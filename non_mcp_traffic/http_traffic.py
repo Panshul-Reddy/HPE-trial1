@@ -34,18 +34,21 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
 
     for i in range(num_requests):
         method = random.choice(["GET", "GET", "POST", "PUT", "DELETE"])
+        # Use a fresh session per request to create a new TCP connection (= new flow)
+        sess = requests.Session()
+        sess.headers["Connection"] = "close"
 
         try:
             if method == "GET":
                 if created_ids and random.random() < 0.5:
                     item_id = random.choice(created_ids)
-                    r = requests.get(f"{base_url}/items/{item_id}", timeout=5)
+                    r = sess.get(f"{base_url}/items/{item_id}", timeout=5)
                 else:
-                    r = requests.get(f"{base_url}/items", timeout=5)
+                    r = sess.get(f"{base_url}/items", timeout=5)
 
             elif method == "POST":
                 payload = random.choice(SAMPLE_PAYLOADS)
-                r = requests.post(f"{base_url}/items", json=payload, timeout=5)
+                r = sess.post(f"{base_url}/items", json=payload, timeout=5)
                 if r.status_code == 201:
                     new_id = r.json().get("id")
                     if new_id:
@@ -55,23 +58,25 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
                 if created_ids:
                     item_id = random.choice(created_ids)
                     payload = random.choice(SAMPLE_PAYLOADS)
-                    r = requests.put(f"{base_url}/items/{item_id}", json=payload, timeout=5)
+                    r = sess.put(f"{base_url}/items/{item_id}", json=payload, timeout=5)
                 else:
-                    r = requests.get(f"{base_url}/health", timeout=5)
+                    r = sess.get(f"{base_url}/health", timeout=5)
 
             elif method == "DELETE":
                 if created_ids:
                     item_id = created_ids.pop(random.randrange(len(created_ids)))
-                    r = requests.delete(f"{base_url}/items/{item_id}", timeout=5)
+                    r = sess.delete(f"{base_url}/items/{item_id}", timeout=5)
                 else:
-                    r = requests.get(f"{base_url}/health", timeout=5)
+                    r = sess.get(f"{base_url}/health", timeout=5)
             else:
-                r = requests.get(f"{base_url}/health", timeout=5)
+                r = sess.get(f"{base_url}/health", timeout=5)
 
             logger.debug("HTTP %s %d", method, r.status_code)
 
         except requests.RequestException as exc:
             logger.warning("HTTP request failed: %s", exc)
+        finally:
+            sess.close()
 
         if delay > 0:
             time.sleep(delay * random.uniform(0.5, 1.5))

@@ -191,6 +191,8 @@ def run_pipeline(
     duration: int = 60,
     num_requests: int = 50,
     mcp_sessions: int = 3,
+    ws_sessions: int = 3,
+    tcp_connections: int = 3,
     interface: str = "",
     output_dir: str = DATA_DIR,
     capture: bool = True,
@@ -200,12 +202,14 @@ def run_pipeline(
 
     Parameters
     ----------
-    duration:      Total traffic generation duration in seconds
-    num_requests:  Number of requests per generator
-    mcp_sessions:  Number of concurrent MCP client sessions
-    interface:     Network interface for packet capture
-    output_dir:    Directory to save pcap files
-    capture:       Whether to run the packet capture step
+    duration:        Total traffic generation duration in seconds
+    num_requests:    Number of requests per generator
+    mcp_sessions:    Number of concurrent MCP client sessions
+    ws_sessions:     Number of concurrent WebSocket sessions
+    tcp_connections:  Number of concurrent TCP connections
+    interface:       Network interface for packet capture
+    output_dir:      Directory to save pcap files
+    capture:         Whether to run the packet capture step
     """
     if not interface:
         interface = _default_loopback_interface()
@@ -276,7 +280,7 @@ def run_pipeline(
         traffic_procs.append(_start([
             _python(), "-m", "non_mcp_traffic.websocket_traffic",
             "--url", f"ws://localhost:{WS_PORT}",
-            "--sessions", "2",
+            "--sessions", str(ws_sessions),
             "--messages", str(num_requests),
         ]))
 
@@ -285,8 +289,8 @@ def run_pipeline(
             _python(), "-m", "non_mcp_traffic.tcp_traffic",
             "--host", "localhost",
             "--port", str(TCP_PORT),
-            "--connections", "3",
-            "--messages", str(num_requests // 3 + 1),
+            "--connections", str(tcp_connections),
+            "--messages", str(num_requests // max(1, tcp_connections) + 1),
         ]))
 
         # Wait for traffic generators to finish (up to duration)
@@ -327,6 +331,8 @@ def main() -> None:
     parser.add_argument("--duration", type=int, default=60, help="Traffic duration in seconds")
     parser.add_argument("--requests", type=int, default=50, help="Requests per generator")
     parser.add_argument("--mcp-sessions", type=int, default=3, help="Concurrent MCP sessions")
+    parser.add_argument("--ws-sessions", type=int, default=3, help="Concurrent WebSocket sessions")
+    parser.add_argument("--tcp-connections", type=int, default=3, help="Concurrent TCP connections")
     parser.add_argument(
         "--interface", default="",
         help="Network interface for capture (default: auto-detect per platform)",
@@ -341,6 +347,8 @@ def main() -> None:
         duration=args.duration,
         num_requests=args.requests,
         mcp_sessions=args.mcp_sessions,
+        ws_sessions=args.ws_sessions,
+        tcp_connections=args.tcp_connections,
         interface=args.interface,
         output_dir=args.output_dir,
         capture=not args.no_capture,
