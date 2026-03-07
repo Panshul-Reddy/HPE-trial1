@@ -205,9 +205,17 @@ data/pcap/non_mcp_1705312800.pcap
 
 ### Step 2 — Extract features
 
+**Linux / macOS:**
 ```bash
 python -m feature_extraction.extractor \
     --pcap-dir data/pcap \
+    --output data/features.csv
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m feature_extraction.extractor `
+    --pcap-dir data/pcap `
     --output data/features.csv
 ```
 
@@ -244,11 +252,21 @@ columns:
 
 ### Step 3 — Train models
 
+**Linux / macOS:**
 ```bash
 python -m model.train \
     --features data/features.csv \
     --output models/ \
     --test-size 0.2 \
+    --cv-folds 5
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m model.train `
+    --features data/features.csv `
+    --output models/ `
+    --test-size 0.2 `
     --cv-folds 5
 ```
 
@@ -295,9 +313,17 @@ iat_mean           0.1234
 
 ### Step 4 — Evaluate on new data
 
+**Linux / macOS:**
 ```bash
 python -m model.evaluate \
     --model models/best_model.pkl \
+    --features data/features.csv
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m model.evaluate `
+    --model models/best_model.pkl `
     --features data/features.csv
 ```
 
