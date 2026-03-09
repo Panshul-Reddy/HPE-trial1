@@ -97,6 +97,10 @@ def main() -> None:
         "--requests", type=int, default=REQUESTS,
         help=f"Requests per generator per run (default: {REQUESTS})",
     )
+    parser.add_argument(
+        "--tls", action="store_true",
+        help="Run encrypted pipeline using HTTPS/TLS (requires certs/server.crt and certs/server.key)",
+    )
     args = parser.parse_args()
 
     target = args.target_rows
@@ -139,6 +143,8 @@ def main() -> None:
             "--tcp-connections", str(iter_tcp_connections),
             "--output-dir", pcap_dir,
         ]
+        if args.tls:
+            cmd.append("--tls")
         print(f"  Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         elapsed = time.time() - t0

@@ -194,11 +194,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="MCP Server")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
+    parser.add_argument("--tls", action="store_true", help="Enable HTTPS using certs/server.crt and certs/server.key")
+    parser.add_argument("--cert", type=str, default="certs/server.crt", help="Path to TLS certificate file")
+    parser.add_argument("--key", type=str, default="certs/server.key", help="Path to TLS private key file")
     args = parser.parse_args()
 
     mcp.settings.host = args.host
     mcp.settings.port = args.port
-    mcp.run(transport="sse")
+
+    if args.tls:
+        # Run with TLS — Uvicorn loads the cert+key and handles all encryption
+        # The MCP tools and logic are exactly the same; only the transport is encrypted
+        import uvicorn
+        app = mcp.sse_app()
+        print(f"Starting MCP server with TLS on https://{args.host}:{args.port}")
+        uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=args.cert, ssl_keyfile=args.key)
+    else:
+        mcp.run(transport="sse")
 
 
 if __name__ == "__main__":

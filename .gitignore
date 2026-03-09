@@ -21,6 +21,10 @@ models/
 .vscode/
 .idea/
 
+# TLS private keys — never commit these
+*.key
+certs/*.key
+
 # Misc
 *.log
 .DS_Store

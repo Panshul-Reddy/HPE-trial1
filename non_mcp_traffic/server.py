@@ -100,9 +100,21 @@ def http_echo():
     return jsonify(data)
 
 
-def run_http_server(host: str = "0.0.0.0", port: int = 5000) -> None:
-    logger.info("Starting HTTP server on %s:%d", host, port)
-    app.run(host=host, port=port, threaded=True, use_reloader=False)
+def run_http_server(
+    host: str = "0.0.0.0",
+    port: int = 5000,
+    certfile: str | None = None,
+    keyfile: str | None = None,
+) -> None:
+    if certfile and keyfile:
+        logger.info("Starting HTTPS server on %s:%d (TLS)", host, port)
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile, keyfile)
+        app.run(host=host, port=port, threaded=True, use_reloader=False, ssl_context=ctx)
+    else:
+        logger.info("Starting HTTP server on %s:%d", host, port)
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +163,9 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--http-port", type=int, default=5000)
     parser.add_argument("--ws-port", type=int, default=5001)
+    parser.add_argument("--tls", action="store_true", help="Enable HTTPS using --cert and --key")
+    parser.add_argument("--cert", default="certs/server.crt", help="Path to TLS certificate")
+    parser.add_argument("--key", default="certs/server.key", help="Path to TLS private key")
     args = parser.parse_args()
 
     ws_thread = threading.Thread(
@@ -158,7 +173,10 @@ def main() -> None:
     )
     ws_thread.start()
 
-    run_http_server(args.host, args.http_port)
+    if args.tls:
+        run_http_server(args.host, args.http_port, certfile=args.cert, keyfile=args.key)
+    else:
+        run_http_server(args.host, args.http_port)
 
 
 if __name__ == "__main__":

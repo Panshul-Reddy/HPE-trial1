@@ -110,19 +110,34 @@ def _random_tool_call() -> tuple[str, dict[str, Any]]:
 # Session logic
 # ---------------------------------------------------------------------------
 
-async def run_session(url: str, session_id: int, num_requests: int) -> None:
+async def run_session(url: str, session_id: int, num_requests: int, ca_cert: str | None = None) -> None:
     """Open one MCP client session and make num_requests tool calls.
 
     To create more unique flows, each session opens multiple short-lived SSE
     connections, making a few requests per connection before reconnecting.
+
+    ca_cert: path to a CA certificate file to trust (needed for self-signed TLS certs).
     """
     logger.info("Session %d: starting %d requests against %s", session_id, num_requests, url)
     sent = 0
     conn_id = 0
+
+    # Build an httpx client that trusts our self-signed cert when ca_cert is given
+    import httpx
+    if ca_cert:
+        def _client_factory(headers=None, timeout=None, auth=None):
+            return httpx.AsyncClient(verify=ca_cert, headers=headers, timeout=timeout, auth=auth)
+        factory = _client_factory
+    else:
+        factory = None  # use default
+
     while sent < num_requests:
         reqs_this_conn = min(random.randint(1, 12), num_requests - sent)
         try:
-            async with sse_client(url=url) as (read_stream, write_stream):
+            sse_kwargs = dict(url=url)
+            if factory:
+                sse_kwargs["httpx_client_factory"] = factory
+            async with sse_client(**sse_kwargs) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
 
@@ -163,10 +178,10 @@ async def run_session(url: str, session_id: int, num_requests: int) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-async def run_all_sessions(url: str, num_sessions: int, num_requests: int) -> None:
+async def run_all_sessions(url: str, num_sessions: int, num_requests: int, ca_cert: str | None = None) -> None:
     """Run all sessions, interleaved for realism."""
     tasks = [
-        asyncio.create_task(run_session(url, i, num_requests))
+        asyncio.create_task(run_session(url, i, num_requests, ca_cert=ca_cert))
         for i in range(num_sessions)
     ]
     await asyncio.gather(*tasks)
@@ -191,9 +206,14 @@ def main() -> None:
         default=10,
         help="Number of tool calls per session (default: 10)",
     )
+    parser.add_argument(
+        "--cert",
+        default=None,
+        help="Path to CA certificate to trust for self-signed TLS (e.g. certs/server.crt)",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run_all_sessions(args.url, args.sessions, args.requests))
+    asyncio.run(run_all_sessions(args.url, args.sessions, args.requests, ca_cert=args.cert))
 
 
 if __name__ == "__main__":

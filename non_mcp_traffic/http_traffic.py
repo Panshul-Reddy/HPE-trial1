@@ -67,8 +67,11 @@ def _random_payload() -> dict:
         return {"batch": True, "items": items, "timestamp": time.time()}
 
 
-def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> None:
-    """Generate HTTP traffic against base_url."""
+def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1, ca_cert: str | None = None) -> None:
+    """Generate HTTP traffic against base_url.
+
+    ca_cert: path to CA certificate to trust for HTTPS with self-signed certs.
+    """
     created_ids: list[int] = []
 
     for i in range(num_requests):
@@ -76,6 +79,8 @@ def run_http_traffic(base_url: str, num_requests: int, delay: float = 0.1) -> No
         # Use a fresh session per request to create a new TCP connection (= new flow)
         sess = requests.Session()
         sess.headers["Connection"] = "close"
+        if ca_cert:
+            sess.verify = ca_cert  # trust our self-signed cert for HTTPS
 
         try:
             if method == "GET":
@@ -135,9 +140,10 @@ def main() -> None:
     parser.add_argument("--url", default="http://localhost:5000", help="Base URL of HTTP server")
     parser.add_argument("--requests", type=int, default=50, help="Number of HTTP requests to send")
     parser.add_argument("--delay", type=float, default=0.1, help="Mean delay between requests (s)")
+    parser.add_argument("--cert", default=None, help="CA certificate to trust for HTTPS (e.g. certs/server.crt)")
     args = parser.parse_args()
 
-    run_http_traffic(args.url, args.requests, args.delay)
+    run_http_traffic(args.url, args.requests, args.delay, ca_cert=args.cert)
 
 
 if __name__ == "__main__":

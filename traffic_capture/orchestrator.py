@@ -32,10 +32,18 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # Ports
-MCP_PORT = 8000
-HTTP_PORT = 5000
-WS_PORT = 5001
-TCP_PORT = 5002
+MCP_PORT      = 8000
+HTTP_PORT     = 5000
+WS_PORT       = 5001
+TCP_PORT      = 5002
+
+# TLS ports (used when --tls is passed)
+MCP_TLS_PORT  = 8443
+HTTP_TLS_PORT = 5443
+
+# Default cert paths
+DEFAULT_CERT = "certs/server.crt"
+DEFAULT_KEY  = "certs/server.key"
 
 DATA_DIR = "data/pcap"
 
@@ -196,6 +204,9 @@ def run_pipeline(
     interface: str = "",
     output_dir: str = DATA_DIR,
     capture: bool = True,
+    tls: bool = False,
+    cert: str = DEFAULT_CERT,
+    key: str = DEFAULT_KEY,
 ) -> None:
     """
     Run the full traffic generation pipeline.
@@ -210,30 +221,42 @@ def run_pipeline(
     interface:       Network interface for packet capture
     output_dir:      Directory to save pcap files
     capture:         Whether to run the packet capture step
+    tls:             Run all servers and clients over HTTPS/TLS
+    cert:            Path to TLS certificate file (used when tls=True)
+    key:             Path to TLS private key file (used when tls=True)
     """
     if not interface:
         interface = _default_loopback_interface()
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     procs: dict[str, subprocess.Popen] = {}
 
+    # Pick ports based on TLS mode
+    mcp_port  = MCP_TLS_PORT  if tls else MCP_PORT
+    http_port = HTTP_TLS_PORT if tls else HTTP_PORT
+    mcp_scheme  = "https" if tls else "http"
+    http_scheme = "https" if tls else "http"
+
     try:
         # ------------------------------------------------------------------ #
         # 1. Start servers
         # ------------------------------------------------------------------ #
-        procs["mcp_server"] = _start(
-            [_python(), "-m", "mcp_server.server", "--port", str(MCP_PORT)]
-        )
-        procs["non_mcp_server"] = _start(
-            [
-                _python(), "-m", "non_mcp_traffic.server",
-                "--http-port", str(HTTP_PORT),
-                "--ws-port", str(WS_PORT),
-            ]
-        )
+        mcp_server_cmd = [_python(), "-m", "mcp_server.server", "--port", str(mcp_port)]
+        if tls:
+            mcp_server_cmd += ["--tls", "--cert", cert, "--key", key]
+        procs["mcp_server"] = _start(mcp_server_cmd)
+
+        non_mcp_cmd = [
+            _python(), "-m", "non_mcp_traffic.server",
+            "--http-port", str(http_port),
+            "--ws-port", str(WS_PORT),
+        ]
+        if tls:
+            non_mcp_cmd += ["--tls", "--cert", cert, "--key", key]
+        procs["non_mcp_server"] = _start(non_mcp_cmd)
         procs["tcp_echo"] = _start_tcp_echo_server(port=TCP_PORT)
 
         logger.info("Waiting for servers to start…")
-        for name, port in [("MCP", MCP_PORT), ("HTTP", HTTP_PORT), ("TCP", TCP_PORT)]:
+        for name, port in [("MCP", mcp_port), ("HTTP", http_port), ("TCP", TCP_PORT)]:
             ok = _wait_for_port("127.0.0.1", port, timeout=20)
             if not ok:
                 logger.warning("%s server on port %d not ready after 20s", name, port)
@@ -245,8 +268,8 @@ def run_pipeline(
             cap_cmd = [
                 _python(), "-m", "traffic_capture.capture",
                 "--interface", interface,
-                "--ports-mcp", str(MCP_PORT),
-                "--ports-non-mcp", str(HTTP_PORT), str(WS_PORT), str(TCP_PORT),
+                "--ports-mcp", str(mcp_port),
+                "--ports-non-mcp", str(http_port), str(WS_PORT), str(TCP_PORT),
                 "--duration", str(duration + 5),   # slightly longer to catch stragglers
                 "--output-dir", output_dir,
             ]
@@ -262,19 +285,25 @@ def run_pipeline(
         traffic_procs: list[subprocess.Popen] = []
 
         # MCP client
-        traffic_procs.append(_start([
+        mcp_client_cmd = [
             _python(), "-m", "mcp_client.client",
-            "--url", f"http://localhost:{MCP_PORT}/sse",
+            "--url", f"{mcp_scheme}://localhost:{mcp_port}/sse",
             "--sessions", str(mcp_sessions),
             "--requests", str(num_requests),
-        ]))
+        ]
+        if tls:
+            mcp_client_cmd += ["--cert", cert]
+        traffic_procs.append(_start(mcp_client_cmd))
 
         # HTTP traffic
-        traffic_procs.append(_start([
+        http_traffic_cmd = [
             _python(), "-m", "non_mcp_traffic.http_traffic",
-            "--url", f"http://localhost:{HTTP_PORT}",
+            "--url", f"{http_scheme}://localhost:{http_port}",
             "--requests", str(num_requests),
-        ]))
+        ]
+        if tls:
+            http_traffic_cmd += ["--cert", cert]
+        traffic_procs.append(_start(http_traffic_cmd))
 
         # WebSocket traffic
         traffic_procs.append(_start([
@@ -341,6 +370,12 @@ def main() -> None:
     parser.add_argument(
         "--no-capture", action="store_true", help="Skip packet capture (generate traffic only)"
     )
+    parser.add_argument(
+        "--tls", action="store_true",
+        help="Run all servers and clients over HTTPS/TLS (uses certs/server.crt and certs/server.key)"
+    )
+    parser.add_argument("--cert", default=DEFAULT_CERT, help="Path to TLS certificate")
+    parser.add_argument("--key", default=DEFAULT_KEY, help="Path to TLS private key")
     args = parser.parse_args()
 
     run_pipeline(
@@ -352,6 +387,9 @@ def main() -> None:
         interface=args.interface,
         output_dir=args.output_dir,
         capture=not args.no_capture,
+        tls=args.tls,
+        cert=args.cert,
+        key=args.key,
     )
 
 
