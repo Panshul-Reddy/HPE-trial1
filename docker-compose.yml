@@ -1,0 +1,41 @@
+services:
+  mcp-server:
+    build: ./mcp-server
+    container_name: mcp-server
+    networks:
+      - mcp-lab-net
+    expose:
+      - "8080" # Standard HTTP port for the SSE transport
+
+  mcp-client:
+    build: ./mcp-client
+    container_name: mcp-client
+    depends_on:
+      - mcp-server
+    networks:
+      - mcp-lab-net
+    environment:
+      - MCP_SERVER_URL=http://mcp-server:8080/sse
+
+  noise-generator:
+    build: ./noise-generator
+    container_name: noise-generator
+    networks:
+      - mcp-lab-net
+
+  # The Network Tap sits on the same network but requires elevated privileges to sniff packets
+  network-tap:
+    image: nicolaka/netshoot  # A standard network troubleshooting image
+    container_name: network-tap
+    network_mode: host # This allows it to see the Docker bridge interfaces
+    command: >
+      bash -c "tcpdump -i any 'tcp port 8443 or tcp port 443' -w /capture/dataset.pcap"
+    volumes:
+      - ./capture:/capture # Dumps the pcap file straight to your local directory
+    depends_on:
+      - mcp-client
+      - noise-generator
+
+networks:
+  mcp-lab-net:
+    driver: bridge
