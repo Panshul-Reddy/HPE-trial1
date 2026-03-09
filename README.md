@@ -11,6 +11,7 @@ A complete ML pipeline to classify **MCP (Model Context Protocol) vs non-MCP net
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
 - [Step-by-Step Tutorial](#step-by-step-tutorial)
+- [Encrypted (TLS) Traffic](#encrypted-tls-traffic)
 - [Running Components Individually](#running-components-individually)
 - [Customizing the Project](#customizing-the-project)
 - [Data Directory Layout](#data-directory-layout)
@@ -64,6 +65,10 @@ MCP_Project/
 │   ├── train.py                  # Train & evaluate Random Forest / XGBoost / Logistic Regression
 │   └── evaluate.py               # Evaluate a saved model on new data
 ├── batch_generate.py             # Automated batch runner to generate large datasets (e.g. 10 000+ rows)
+├── generate_certs.py             # Generates self-signed TLS certificate for encrypted traffic testing
+├── certs/
+│   └── server.crt                # Public TLS certificate (private key excluded from repo)
+├── CHANGES.md                    # Plain-English summary of all TLS additions
 └── results/
     ├── training_results.txt      # Saved training metrics for all classifiers
     └── evaluation_results.txt    # Saved evaluation metrics on unseen test data
@@ -80,6 +85,7 @@ MCP_Project/
 | **Root / Administrator privileges** | Scapy needs raw-socket access for packet capture (`sudo` on Linux/macOS) |
 | **Loopback interface** (`lo` on Linux, `lo0` on macOS, auto-detected on Windows) | Default capture interface; all servers bind to `localhost` |
 | **Git** | To clone this repository |
+| **cryptography** *(optional, for TLS)* | Required only if you want to generate encrypted traffic — installed automatically via `requirements.txt` |
 
 ### Platform notes
 
@@ -96,8 +102,8 @@ MCP_Project/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/AryanUrs/MCP_Project.git
-cd MCP_Project
+git clone https://github.com/Panshul-Reddy/HPE-trial1.git
+cd HPE-trial1
 ```
 
 ### 2. Create a virtual environment (recommended)
@@ -447,6 +453,109 @@ Confusion Matrix:
 
 ---
 
+## Encrypted (TLS) Traffic
+
+In addition to plain HTTP traffic, the pipeline supports **TLS/HTTPS encryption** — both MCP and non-MCP servers can be started in encrypted mode, and all clients will verify certificates automatically. This mirrors real-world deployments where traffic is encrypted in transit.
+
+### Why encrypted traffic matters
+
+Training a model on **only** plain HTTP traffic and then evaluating it on encrypted traffic drops accuracy from ~99.9% to ~66%. TLS wraps data in fixed-size records, masking the distinctive packet-size differences between MCP and non-MCP flows. The solution is to train on a **combined** dataset that includes both plain and encrypted samples.
+
+| Training data | Test accuracy |
+|---|---|
+| Plain HTTP only | ~99.9% |
+| Encrypted (TLS) only | ~66% |
+| Combined (plain + TLS) | ~99%+ |
+
+### Step 1 — Generate TLS certificates (once)
+
+A self-signed certificate is included in `certs/server.crt`. To regenerate it (or if you cloned fresh and it is missing):
+
+```powershell
+python generate_certs.py
+```
+
+This creates:
+- `certs/server.crt` — public certificate (committed to the repo)
+- `certs/server.key` — private key (**never committed**, excluded by `.gitignore`)
+
+The certificate is valid for `localhost` and `127.0.0.1`.
+
+> **Note:** The private key file (`certs/server.key`) is excluded from version control for security reasons. You must run `generate_certs.py` once after cloning if you want to use TLS mode.
+
+### Step 2 — Generate an encrypted dataset
+
+Add `--tls` to any `batch_generate.py` command. Use separate `--pcap-dir` and `--output` paths to keep encrypted data separate from plain data:
+
+**Windows (Administrator PowerShell):**
+```powershell
+python batch_generate.py `
+    --target-rows 2000 `
+    --tls `
+    --pcap-dir data/pcap_tls `
+    --output data/tls_features.csv
+```
+
+**Linux / macOS:**
+```bash
+sudo python batch_generate.py \
+    --target-rows 2000 \
+    --tls \
+    --pcap-dir data/pcap_tls \
+    --output data/tls_features.csv
+```
+
+When `--tls` is set, the orchestrator automatically:
+- Starts the MCP server on **port 8443** (HTTPS)
+- Starts the non-MCP server on **port 5443** (HTTPS)
+- Passes the certificate to all clients for verification
+
+### Step 3 — Train on encrypted data
+
+```powershell
+python -m model.train --features data/tls_features.csv --output models/
+```
+
+### Step 4 — Evaluate on encrypted test data
+
+```powershell
+# First generate a separate encrypted test set
+python batch_generate.py `
+    --target-rows 1000 `
+    --tls `
+    --pcap-dir data/pcap_tls_test `
+    --output data/tls_test_features.csv
+
+# Then evaluate
+python -m model.evaluate `
+    --model models/best_model.pkl `
+    --features data/tls_test_features.csv
+```
+
+### Step 5 (Recommended) — Combined training for best accuracy
+
+Train on both plain and encrypted data together. This is the recommended approach for a robust, production-ready model:
+
+```powershell
+# Merge the two datasets
+python -c "
+import pandas as pd
+plain = pd.read_csv('data/features.csv')
+tls   = pd.read_csv('data/tls_features.csv')
+combined = pd.concat([plain, tls], ignore_index=True)
+combined.to_csv('data/combined_features.csv', index=False)
+print(f'Combined dataset: {len(combined)} rows')
+"
+
+# Train on combined data
+python -m model.train --features data/combined_features.csv --output models/
+
+# Evaluate on encrypted test set
+python -m model.evaluate --model models/best_model.pkl --features data/tls_test_features.csv
+```
+
+---
+
 ## Running Components Individually
 
 Each module can be run as a standalone command. This is useful for debugging,
@@ -454,8 +563,14 @@ developing new features, or generating traffic without the full orchestrator.
 
 ### MCP Server
 
+**Plain HTTP (port 8000):**
 ```bash
 python -m mcp_server.server --port 8000
+```
+
+**HTTPS / TLS (port 8443):**
+```bash
+python -m mcp_server.server --port 8443 --tls --cert certs/server.crt --key certs/server.key
 ```
 
 Tools exposed: `add`, `subtract`, `multiply`, `divide`, `power`, `sqrt`,
@@ -465,20 +580,38 @@ Tools exposed: `add`, `subtract`, `multiply`, `divide`, `power`, `sqrt`,
 
 ### MCP Client
 
+**Plain HTTP:**
 ```bash
 python -m mcp_client.client --url http://localhost:8000/sse --sessions 3 --requests 20
 ```
 
+**HTTPS / TLS:**
+```bash
+python -m mcp_client.client --url https://localhost:8443/sse --sessions 3 --requests 20 --cert certs/server.crt
+```
+
 ### Non-MCP Traffic Server
 
+**Plain HTTP:**
 ```bash
 python -m non_mcp_traffic.server --http-port 5000 --ws-port 5001
 ```
 
+**HTTPS / TLS:**
+```bash
+python -m non_mcp_traffic.server --http-port 5443 --ws-port 5001 --tls --cert certs/server.crt --key certs/server.key
+```
+
 ### HTTP Traffic Generator
 
+**Plain HTTP:**
 ```bash
 python -m non_mcp_traffic.http_traffic --url http://localhost:5000 --requests 50
+```
+
+**HTTPS / TLS:**
+```bash
+python -m non_mcp_traffic.http_traffic --url https://localhost:5443 --requests 50 --cert certs/server.crt
 ```
 
 ### WebSocket Traffic Generator
@@ -614,13 +747,25 @@ python -m feature_extraction.extractor `
 ```
 data/
 ├── pcap/
-│   ├── mcp_<timestamp>.pcap       # captured MCP packets (training)
-│   └── non_mcp_<timestamp>.pcap   # captured non-MCP packets (training)
+│   ├── mcp_<timestamp>.pcap       # plain HTTP MCP packets (training)
+│   └── non_mcp_<timestamp>.pcap   # plain HTTP non-MCP packets (training)
 ├── pcap_test/
-│   ├── mcp_<timestamp>.pcap       # captured MCP packets (testing)
-│   └── non_mcp_<timestamp>.pcap   # captured non-MCP packets (testing)
-├── features.csv                   # training dataset (per-flow features)
-└── test_features.csv              # test dataset (per-flow features)
+│   ├── mcp_<timestamp>.pcap       # plain HTTP MCP packets (testing)
+│   └── non_mcp_<timestamp>.pcap   # plain HTTP non-MCP packets (testing)
+├── pcap_tls/
+│   ├── mcp_<timestamp>.pcap       # encrypted MCP packets (training)
+│   └── non_mcp_<timestamp>.pcap   # encrypted non-MCP packets (training)
+├── pcap_tls_test/
+│   ├── mcp_<timestamp>.pcap       # encrypted MCP packets (testing)
+│   └── non_mcp_<timestamp>.pcap   # encrypted non-MCP packets (testing)
+├── features.csv                   # plain HTTP training dataset
+├── test_features.csv              # plain HTTP test dataset
+├── tls_features.csv               # encrypted training dataset
+├── tls_test_features.csv          # encrypted test dataset
+└── combined_features.csv          # merged plain + encrypted dataset (recommended for training)
+certs/
+├── server.crt                     # public TLS certificate (tracked in git)
+└── server.key                     # private TLS key (NOT tracked — regenerate with generate_certs.py)
 models/
 └── best_model.pkl                 # saved best classifier
 results/
@@ -702,6 +847,28 @@ python -c "from scapy.all import get_if_list; print(get_if_list())"
 The training module falls back to scikit-learn's `GradientBoostingClassifier`
 automatically. You can safely ignore the `xgboost` install error and
 proceed.
+
+### TLS / HTTPS issues
+
+**`certs/server.key` not found:**  
+The private key is excluded from the repo. Run `python generate_certs.py` once after cloning to create both `certs/server.crt` and `certs/server.key`.
+
+**`[SSL: CERTIFICATE_VERIFY_FAILED]` in client:**  
+Make sure you pass `--cert certs/server.crt` to the client (or `--tls` to `batch_generate.py`). The clients need the CA cert to verify the self-signed certificate.
+
+**`Address already in use` on port 8443 or 5443:**  
+A previous server run may still be running. Kill it with:
+```powershell
+# Windows — find and kill the process on port 8443
+taskkill /F /PID (netstat -ano | findstr ":8443 " | ForEach-Object { ($_ -split '\s+')[-1] } | Select-Object -First 1)
+```
+```bash
+# Linux / macOS
+fuser -k 8443/tcp 5443/tcp
+```
+
+**Low accuracy on encrypted test data (~66%):**  
+This is expected when training on plain HTTP only. See the [Encrypted (TLS) Traffic](#encrypted-tls-traffic) section — specifically Step 5 (Combined Training) — for the recommended fix.
 
 ### Low F1-score or poor model performance
 
