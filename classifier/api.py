@@ -1,15 +1,15 @@
 """
 FastFlow Early Inference API (Machine Learning Engine)
 
-This module implements an asynchronous FastAPI server that hosts pre-trained XGBoost 
-sequence models. It provides low-latency inference for the Rust feature extractor, 
-dynamically selecting the appropriate N-packet threshold model based on the number of 
-observed packets in the network flow.
+This module implements an asynchronous FastAPI server that hosts pre-trained tree
+ensemble sequence models. It provides low-latency inference for the Rust feature
+extractor, dynamically selecting the appropriate N-packet threshold model based on
+the number of observed packets in the network flow.
 """
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-import xgboost as xgb
+import joblib
 import numpy as np
 import os
 import time
@@ -18,6 +18,17 @@ app = FastAPI(title="FastFlow Early Inference API")
 
 THRESHOLDS = [3, 5, 8, 10, 15, 20]
 models = {}
+
+
+def load_serialized_model(path: str):
+    if path.endswith(".joblib"):
+        return joblib.load(path)
+
+    import xgboost as xgb
+
+    model = xgb.XGBClassifier()
+    model.load_model(path)
+    return model
 
 def get_feature_indices(n: int) -> list[int]:
     """
@@ -40,16 +51,24 @@ def get_feature_indices(n: int) -> list[int]:
 @app.on_event("startup")
 def load_models():
     for n in THRESHOLDS:
-        path = f"models/xgb_n{n}.json"
+        path = f"models/n{n}.joblib"
+        legacy_path = f"models/xgb_n{n}.json"
         if os.path.exists(path):
-            m = xgb.XGBClassifier()
-            m.load_model(path)
+            m = load_serialized_model(path)
             models[n] = m
             print(f"Loaded N={n} model.")
-    full_path = "models/xgb_full.json"
+        elif os.path.exists(legacy_path):
+            m = load_serialized_model(legacy_path)
+            models[n] = m
+            print(f"Loaded N={n} model.")
+    full_path = "models/full.joblib"
+    legacy_full_path = "models/xgb_full.json"
     if os.path.exists(full_path):
-        m = xgb.XGBClassifier()
-        m.load_model(full_path)
+        m = load_serialized_model(full_path)
+        models["full"] = m
+        print("Loaded Full model.")
+    elif os.path.exists(legacy_full_path):
+        m = load_serialized_model(legacy_full_path)
         models["full"] = m
         print("Loaded Full model.")
 

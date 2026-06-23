@@ -36,7 +36,7 @@ The core data acquisition engine is implemented in Rust. It operates in promiscu
 
 ### 2. FastFlow Inference API (Machine Learning Engine)
 Located in `classifier/`.
-This component serves as the asynchronous inference engine. Implemented as a Python API, it serves pre-trained XGBoost sequence models with the following optimizations:
+This component serves as the asynchronous inference engine. Implemented as a Python API, it serves pre-trained tree-ensemble sequence models with the following optimizations:
 * **Threshold Buffering:** The Rust core emits feature vectors strictly at predefined packet milestones: N = [3, 5, 8, 10, 15, 20].
 * **Progressive Confidence Evaluation:** The API routes incoming requests to the corresponding N-packet model. If the classification confidence exceeds the requisite threshold (>85%), a terminal classification is returned. If confidence is insufficient, the system returns an `UNKNOWN_WAIT` directive, instructing the Rust core to accumulate further packets before issuing subsequent queries.
 
@@ -61,7 +61,7 @@ Developing a robust, resilient model necessitates a highly diverse and represent
 The machine learning strategy avoids processing raw packet captures through deep learning networks, which is prone to overfitting. Instead, the approach relies on meticulously engineered features and early-sequence classifiers.
 
 * **Multi-Class Objectives:** Traffic is classified across five distinct categories: `[Noise, MCP-Fetch, MCP-Memory, MCP-Filesystem, MCP-GitHub]`.
-* **Early-Sequence Models:** Distinct XGBoost estimators are trained for truncated packet sequences. For instance, an N=5 model evaluates exclusively the first five packets, whereas an N=10 model evaluates ten. This architecture facilitates split-second classification prior to full payload transmission, preserving bandwidth and proactively neutralizing threats.
+* **Early-Sequence Models:** Distinct tree-ensemble estimators are trained for truncated packet sequences. The training script compares Random Forest, Extra Trees, and HistGradientBoosting candidates for each threshold and keeps the best validation performer. This architecture facilitates split-second classification prior to full payload transmission, preserving bandwidth and proactively neutralizing threats.
 
 ---
 
@@ -95,7 +95,7 @@ Docker runs natively on the host kernel. Container-to-container traffic can be s
    ```
 
 3. **Train the Models:**
-   Navigate to the `classifier/` directory to train the XGBoost models across all packet thresholds (N=3, 5, 8, 10, etc.).
+   Navigate to the `classifier/` directory to train the tree-ensemble models across all packet thresholds (N=3, 5, 8, 10, etc.).
    ```bash
    cd classifier/
    source .venv/bin/activate
