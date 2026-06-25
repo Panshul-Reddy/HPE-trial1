@@ -17,3 +17,5 @@ rust-extractor/target/
 
 # models
 classifier/models/*.joblib
+
+*.DS_Store

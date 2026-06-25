@@ -37,35 +37,7 @@ def build_model_candidates(random_state: int = 42):
             n_jobs=-1,
             class_weight="balanced_subsample",
         ),
-        "random_forest": RandomForestClassifier(
-            n_estimators=400,
-            random_state=random_state,
-            n_jobs=-1,
-            class_weight="balanced_subsample",
-        ),
-        "hist_gradient_boosting": HistGradientBoostingClassifier(
-            max_iter=250,
-            learning_rate=0.08,
-            max_depth=6,
-            random_state=random_state,
-        ),
     }
-
-    if xgb is not None:
-        candidates["xgboost"] = xgb.XGBClassifier(
-            objective="multi:softprob",
-            num_class=7,
-            eval_metric="mlogloss",
-            max_depth=5,
-            learning_rate=0.1,
-            n_estimators=300,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.0,
-            tree_method="hist",
-            random_state=random_state,
-        )
-
     return candidates
 
 
