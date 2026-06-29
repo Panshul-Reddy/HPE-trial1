@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-reports_dir = "models/reports"
+reports_dir = "classifier/models/reports"
 
 print("=" * 80)
 print("MODEL PERFORMANCE ANALYSIS")
