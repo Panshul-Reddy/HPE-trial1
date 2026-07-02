@@ -1,11 +1,6 @@
 
 """
 FastFlow Early Inference API (Machine Learning Engine)
-
-This module implements an asynchronous FastAPI server that hosts pre-trained tree
-ensemble sequence models. It provides low-latency inference for the Rust feature
-extractor, dynamically selecting the appropriate N-packet threshold model based on
-the number of observed packets in the network flow.
 """
 
 from fastapi import FastAPI
@@ -18,6 +13,7 @@ import os
 import time
 from collections import deque
 from typing import Optional
+import threading
 
 app = FastAPI(title="FastFlow Early Inference API")
 
@@ -26,12 +22,20 @@ models = {}
 
 # --- State for Dashboard ---
 START_TIME = time.time()
-TOTAL_FLOWS = 0
-TOTAL_MCP = 0
-TOTAL_NOISE = 0
-TOTAL_WITH_GT = 0
-CORRECT_PREDS = 0
-LATENCY_SAMPLES = deque(maxlen=1000)
+DASH_LOCK = threading.Lock()
+
+class DashboardState:
+    def __init__(self):
+        self.total_flows = 0
+        self.total_mcp = 0
+        self.total_noise = 0
+        self.total_with_gt = 0
+        self.correct_preds = 0
+        self.latency_samples = deque(maxlen=1000)
+        self.active_predictions = {} # flow_display -> (label, ground_truth, timestamp)
+        self.recent_flows = {}       # flow_display -> FlowRecord (ordered by insertion in Python 3.7+)
+
+state = DashboardState()
 
 class FlowRecord(BaseModel):
     flow_display: str
@@ -43,25 +47,15 @@ class FlowRecord(BaseModel):
     ground_truth: Optional[int] = None
     inference_latency: float
 
-# Keep last 500 flows
-RECENT_FLOWS = deque(maxlen=500)
-ACTIVE_PREDICTIONS = {}  # flow_display -> (label, ground_truth)
-
-
 def load_serialized_model(path: str):
     if path.endswith(".joblib"):
         return joblib.load(path)
-
     import xgboost as xgb
-
     model = xgb.XGBClassifier()
     model.load_model(path)
     return model
 
 def get_feature_indices(n: int) -> list[int]:
-    """
-    Maps the progressive feature indices to the 115-dimension array sent by the Rust core.
-    """
     indices = list(range(15)) # Base 15 features
     for i in range(n):
         indices.append(15 + i) # seq_size
@@ -108,20 +102,72 @@ class PredictBatchRequest(BaseModel):
 def health():
     return {"status": "ok"}
 
+def update_stats(flow_display: str, label: int, gt: Optional[int], is_closed: bool, mcp_prob: float, noise_prob: float, pkt_count: int, duration_s: float, latency_ms: float):
+    with DASH_LOCK:
+        now = time.time()
+        
+        # ACTIVE_PREDICTIONS Cleanup (prevent memory leaks)
+        if len(state.active_predictions) > 2000:
+            # Remove flows older than 5 minutes
+            stale_keys = [k for k, v in state.active_predictions.items() if now - v[2] > 300]
+            for k in stale_keys:
+                del state.active_predictions[k]
+
+        if flow_display in state.active_predictions:
+            old_label, old_gt, _ = state.active_predictions[flow_display]
+            if old_label >= 1: state.total_mcp = max(0, state.total_mcp - 1)
+            else: state.total_noise = max(0, state.total_noise - 1)
+            
+            if old_gt is not None:
+                state.total_with_gt = max(0, state.total_with_gt - 1)
+                if (old_gt == 0 and old_label == 0) or (old_gt >= 1 and old_label >= 1):
+                    state.correct_preds = max(0, state.correct_preds - 1)
+        else:
+            state.total_flows += 1
+            
+        if label >= 1: state.total_mcp += 1
+        else: state.total_noise += 1
+        
+        if gt is not None:
+            state.total_with_gt += 1
+            if (gt == 0 and label == 0) or (gt >= 1 and label >= 1):
+                state.correct_preds += 1
+                
+        if is_closed:
+            state.active_predictions.pop(flow_display, None)
+        else:
+            state.active_predictions[flow_display] = (label, gt, now)
+            
+        # O(1) recent flows dictionary
+        # Pop if exists to re-insert at the end (making it most recent in dict order)
+        state.recent_flows.pop(flow_display, None)
+        state.recent_flows[flow_display] = FlowRecord(
+            flow_display=flow_display,
+            label=label,
+            proba_mcp=mcp_prob,
+            proba_noise=noise_prob,
+            pkt_count=pkt_count,
+            duration_s=duration_s,
+            ground_truth=gt,
+            inference_latency=latency_ms
+        )
+        
+        # Enforce max length of 500
+        if len(state.recent_flows) > 500:
+            oldest_key = next(iter(state.recent_flows))
+            del state.recent_flows[oldest_key]
+
+
 @app.post("/predict")
 def predict(req: PredictRequest):
-    global TOTAL_FLOWS, TOTAL_MCP, TOTAL_NOISE, TOTAL_WITH_GT, CORRECT_PREDS
     t0 = time.perf_counter()
     
     feat = req.features
     if len(feat) != 115:
         return {"error": f"Expected 115 features, got {len(feat)}"}
     
-    # We dynamically decide which model to use based on the number of non-zero packets
-    # In Rust, total_pkts is index 1
     total_pkts = int(feat[1])
     
-    # Find the largest threshold model that we can use
     target_n = None
     for n in reversed(THRESHOLDS):
         if total_pkts >= n and n in models:
@@ -129,7 +175,7 @@ def predict(req: PredictRequest):
             break
             
     if target_n is None:
-        return {"label": 0, "proba": [1.0, 0.0]} # Default noise for early packets
+        return {"label": 0, "proba": [1.0, 0.0]} 
             
     model = models[target_n]
     
@@ -141,11 +187,9 @@ def predict(req: PredictRequest):
 
     probas = model.predict_proba(x)[0]
     
-    # Classes: 0 is noise, 1-6 are MCP.
     noise_prob = float(probas[0])
     mcp_prob = float(sum(probas[1:]))
 
-    # Handle probability dilution across multiple classes.
     if mcp_prob > noise_prob:
         label = int(np.argmax(probas[1:]) + 1)
     else:
@@ -153,56 +197,23 @@ def predict(req: PredictRequest):
     
     t1 = time.perf_counter()
     latency_ms = (t1 - t0) * 1000
-    LATENCY_SAMPLES.append(latency_ms)
+    
+    with DASH_LOCK:
+        state.latency_samples.append(latency_ms)
 
-    # --- Update Dashboard Stats ---
     if req.flow_display:
         gt = None if req.ground_truth == 255 else req.ground_truth
-        
-        # Deduplicate
-        if req.flow_display in ACTIVE_PREDICTIONS:
-            old_label, old_gt = ACTIVE_PREDICTIONS[req.flow_display]
-            if old_label >= 1: TOTAL_MCP = max(0, TOTAL_MCP - 1)
-            else: TOTAL_NOISE = max(0, TOTAL_NOISE - 1)
-            
-            if old_gt is not None:
-                TOTAL_WITH_GT = max(0, TOTAL_WITH_GT - 1)
-                if (old_gt == 0 and old_label == 0) or (old_gt >= 1 and old_label >= 1):
-                    CORRECT_PREDS = max(0, CORRECT_PREDS - 1)
-        else:
-            TOTAL_FLOWS += 1
-            
-        if label >= 1: TOTAL_MCP += 1
-        else: TOTAL_NOISE += 1
-        
-        if gt is not None:
-            TOTAL_WITH_GT += 1
-            if (gt == 0 and label == 0) or (gt >= 1 and label >= 1):
-                CORRECT_PREDS += 1
-                
-        if req.is_closed:
-            ACTIVE_PREDICTIONS.pop(req.flow_display, None)
-        else:
-            ACTIVE_PREDICTIONS[req.flow_display] = (label, gt)
-            
-        # Update recent flows list
-        flow_record = FlowRecord(
+        update_stats(
             flow_display=req.flow_display,
             label=label,
-            proba_mcp=mcp_prob,
-            proba_noise=noise_prob,
+            gt=gt,
+            is_closed=req.is_closed,
+            mcp_prob=mcp_prob,
+            noise_prob=noise_prob,
             pkt_count=req.pkt_count,
             duration_s=req.duration_s,
-            ground_truth=gt,
-            inference_latency=latency_ms
+            latency_ms=latency_ms
         )
-        
-        # Remove old entry if exists to put it at the front
-        for i, r in enumerate(RECENT_FLOWS):
-            if r.flow_display == req.flow_display:
-                del RECENT_FLOWS[i]
-                break
-        RECENT_FLOWS.appendleft(flow_record)
     
     return {
         "label": label,
@@ -261,30 +272,31 @@ def predict_batch(req: PredictBatchRequest):
             
     return {"predictions": predictions}
 
-# --- Dashboard Endpoints ---
-
 @app.get("/api/stats")
 def get_stats():
-    acc = None
-    if TOTAL_WITH_GT > 0:
-        acc = (CORRECT_PREDS / TOTAL_WITH_GT) * 100.0
-        
-    avg_latency = None
-    if len(LATENCY_SAMPLES) > 0:
-        avg_latency = sum(LATENCY_SAMPLES) / len(LATENCY_SAMPLES)
-        
-    return {
-        "uptime": int(time.time() - START_TIME),
-        "total_flows": TOTAL_FLOWS,
-        "total_mcp": TOTAL_MCP,
-        "total_noise": TOTAL_NOISE,
-        "accuracy": acc,
-        "avg_latency": avg_latency
-    }
+    with DASH_LOCK:
+        acc = None
+        if state.total_with_gt > 0:
+            acc = (state.correct_preds / state.total_with_gt) * 100.0
+            
+        avg_latency = None
+        if len(state.latency_samples) > 0:
+            avg_latency = sum(state.latency_samples) / len(state.latency_samples)
+            
+        return {
+            "uptime": int(time.time() - START_TIME),
+            "total_flows": state.total_flows,
+            "total_mcp": state.total_mcp,
+            "total_noise": state.total_noise,
+            "accuracy": acc,
+            "avg_latency": avg_latency
+        }
 
 @app.get("/api/flows")
 def get_flows():
-    return list(RECENT_FLOWS)
+    with DASH_LOCK:
+        # Return most recent flows (end of dict) reversed to match the queue behavior
+        return list(reversed(list(state.recent_flows.values())))
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
