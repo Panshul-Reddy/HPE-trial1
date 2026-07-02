@@ -1,3 +1,4 @@
+
 """
 FastFlow Early Inference API (Machine Learning Engine)
 
@@ -8,16 +9,43 @@ the number of observed packets in the network flow.
 """
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import joblib
 import numpy as np
 import os
 import time
+from collections import deque
+from typing import Optional
 
 app = FastAPI(title="FastFlow Early Inference API")
 
 THRESHOLDS = [3, 5, 8, 10, 15, 20]
 models = {}
+
+# --- State for Dashboard ---
+START_TIME = time.time()
+TOTAL_FLOWS = 0
+TOTAL_MCP = 0
+TOTAL_NOISE = 0
+TOTAL_WITH_GT = 0
+CORRECT_PREDS = 0
+LATENCY_SAMPLES = deque(maxlen=1000)
+
+class FlowRecord(BaseModel):
+    flow_display: str
+    label: int
+    proba_mcp: float
+    proba_noise: float
+    pkt_count: int
+    duration_s: float
+    ground_truth: Optional[int] = None
+    inference_latency: float
+
+# Keep last 500 flows
+RECENT_FLOWS = deque(maxlen=500)
+ACTIVE_PREDICTIONS = {}  # flow_display -> (label, ground_truth)
 
 
 def load_serialized_model(path: str):
@@ -67,6 +95,11 @@ def load_models():
 
 class PredictRequest(BaseModel):
     features: list[float]
+    flow_display: str = ""
+    ground_truth: int = 255
+    pkt_count: int = 0
+    duration_s: float = 0.0
+    is_closed: bool = False
 
 class PredictBatchRequest(BaseModel):
     features_batch: list[list[float]]
@@ -77,6 +110,9 @@ def health():
 
 @app.post("/predict")
 def predict(req: PredictRequest):
+    global TOTAL_FLOWS, TOTAL_MCP, TOTAL_NOISE, TOTAL_WITH_GT, CORRECT_PREDS
+    t0 = time.perf_counter()
+    
     feat = req.features
     if len(feat) != 115:
         return {"error": f"Expected 115 features, got {len(feat)}"}
@@ -110,19 +146,64 @@ def predict(req: PredictRequest):
     mcp_prob = float(sum(probas[1:]))
 
     # Handle probability dilution across multiple classes.
-    # Instead of argmax across all 7 classes, check if the combined MCP probability 
-    # beats Noise. If it does, find the most likely MCP class.
     if mcp_prob > noise_prob:
         label = int(np.argmax(probas[1:]) + 1)
     else:
         label = 0
     
-    # Progressive Confidence Thresholding
-    if target_n != "full" and target_n < 20:
-        if max(probas) < 0.85:
-            # Fallback strategy: wait for higher confidence before returning a definitive prediction.
-            pass
+    t1 = time.perf_counter()
+    latency_ms = (t1 - t0) * 1000
+    LATENCY_SAMPLES.append(latency_ms)
 
+    # --- Update Dashboard Stats ---
+    if req.flow_display:
+        gt = None if req.ground_truth == 255 else req.ground_truth
+        
+        # Deduplicate
+        if req.flow_display in ACTIVE_PREDICTIONS:
+            old_label, old_gt = ACTIVE_PREDICTIONS[req.flow_display]
+            if old_label >= 1: TOTAL_MCP = max(0, TOTAL_MCP - 1)
+            else: TOTAL_NOISE = max(0, TOTAL_NOISE - 1)
+            
+            if old_gt is not None:
+                TOTAL_WITH_GT = max(0, TOTAL_WITH_GT - 1)
+                if (old_gt == 0 and old_label == 0) or (old_gt >= 1 and old_label >= 1):
+                    CORRECT_PREDS = max(0, CORRECT_PREDS - 1)
+        else:
+            TOTAL_FLOWS += 1
+            
+        if label >= 1: TOTAL_MCP += 1
+        else: TOTAL_NOISE += 1
+        
+        if gt is not None:
+            TOTAL_WITH_GT += 1
+            if (gt == 0 and label == 0) or (gt >= 1 and label >= 1):
+                CORRECT_PREDS += 1
+                
+        if req.is_closed:
+            ACTIVE_PREDICTIONS.pop(req.flow_display, None)
+        else:
+            ACTIVE_PREDICTIONS[req.flow_display] = (label, gt)
+            
+        # Update recent flows list
+        flow_record = FlowRecord(
+            flow_display=req.flow_display,
+            label=label,
+            proba_mcp=mcp_prob,
+            proba_noise=noise_prob,
+            pkt_count=req.pkt_count,
+            duration_s=req.duration_s,
+            ground_truth=gt,
+            inference_latency=latency_ms
+        )
+        
+        # Remove old entry if exists to put it at the front
+        for i, r in enumerate(RECENT_FLOWS):
+            if r.flow_display == req.flow_display:
+                del RECENT_FLOWS[i]
+                break
+        RECENT_FLOWS.appendleft(flow_record)
+    
     return {
         "label": label,
         "proba": [noise_prob, mcp_prob]
@@ -179,3 +260,34 @@ def predict_batch(req: PredictBatchRequest):
             }
             
     return {"predictions": predictions}
+
+# --- Dashboard Endpoints ---
+
+@app.get("/api/stats")
+def get_stats():
+    acc = None
+    if TOTAL_WITH_GT > 0:
+        acc = (CORRECT_PREDS / TOTAL_WITH_GT) * 100.0
+        
+    avg_latency = None
+    if len(LATENCY_SAMPLES) > 0:
+        avg_latency = sum(LATENCY_SAMPLES) / len(LATENCY_SAMPLES)
+        
+    return {
+        "uptime": int(time.time() - START_TIME),
+        "total_flows": TOTAL_FLOWS,
+        "total_mcp": TOTAL_MCP,
+        "total_noise": TOTAL_NOISE,
+        "accuracy": acc,
+        "avg_latency": avg_latency
+    }
+
+@app.get("/api/flows")
+def get_flows():
+    return list(RECENT_FLOWS)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+def index():
+    return FileResponse("static/dashboard.html")

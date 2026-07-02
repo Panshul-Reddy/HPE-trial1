@@ -29,11 +29,16 @@ impl Default for InferenceConfig {
 #[derive(Debug, Serialize)]
 struct PredictRequest {
     features: Vec<f64>,
+    flow_display: String,
+    ground_truth: i32,
+    pkt_count: usize,
+    duration_s: f64,
+    is_closed: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct PredictBatchRequest {
-    batch: Vec<Vec<f64>>,
+    features_batch: Vec<Vec<f64>>,
 }
 
 /// Single classification response.
@@ -82,10 +87,20 @@ impl InferenceClient {
     pub async fn predict(
         &self,
         features: &[f64; 115],
+        flow_display: String,
+        ground_truth: i32,
+        pkt_count: usize,
+        duration_s: f64,
+        is_closed: bool,
     ) -> Result<(PredictResponse, Duration)> {
         let url = format!("{}/predict", self.config.base_url);
         let body = PredictRequest {
             features: features.to_vec(),
+            flow_display,
+            ground_truth,
+            pkt_count,
+            duration_s,
+            is_closed,
         };
 
         let start = Instant::now();
@@ -126,7 +141,7 @@ impl InferenceClient {
     ) -> Result<(Vec<PredictResponse>, Duration)> {
         let url = format!("{}/predict_batch", self.config.base_url);
         let body = PredictBatchRequest {
-            batch: batch.iter().map(|f| f.to_vec()).collect(),
+            features_batch: batch.iter().map(|f| f.to_vec()).collect(),
         };
 
         let start = Instant::now();

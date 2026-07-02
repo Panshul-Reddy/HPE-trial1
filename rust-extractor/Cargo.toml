@@ -1,7 +1,7 @@
 [package]
 name = "live-analyzer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 description = "Live MCP traffic classifier — captures packets, extracts flow features, classifies via trained model"
 
 [dependencies]

@@ -381,7 +381,15 @@ async fn run_classification_pipeline(
         };
 
 
-        match client.predict(&features).await {
+        let is_closed = !matches!(finalized.reason, reaper::FinalizationReason::EarlyEvaluation);
+        match client.predict(
+            &features,
+            flow.key.display(),
+            flow.ground_truth_label().unwrap_or(255) as i32,
+            flow.pkt_count(),
+            flow.end_ts - flow.start_ts,
+            is_closed,
+        ).await {
             Ok((prediction, latency)) => {
                 let classified = ClassifiedFlow {
                     flow_display: flow.key.display(),
